@@ -1,0 +1,94 @@
+-- DEVgauge Database Schema
+-- Compatible with Supabase PostgreSQL and standard local PostgreSQL
+
+-- Enable UUID extension if available (optional, but good practice for Supabase)
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- TRIGGER FUNCTION FOR UPDATING TIMESTAMPS
+CREATE OR REPLACE FUNCTION update_modified_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE 'plpgsql';
+
+-- USERS TABLE
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Handle schema migration for existing databases missing updated_at
+ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+
+-- Trigger for users updated_at
+DROP TRIGGER IF EXISTS update_users_modtime ON users;
+CREATE TRIGGER update_users_modtime
+    BEFORE UPDATE ON users
+    FOR EACH ROW
+    EXECUTE FUNCTION update_modified_column();
+
+-- PROJECTS TABLE
+CREATE TABLE IF NOT EXISTS projects (
+    id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    project_name VARCHAR(100) NOT NULL,
+    github_url VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Handle schema migration for existing databases missing updated_at
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+
+-- Trigger for projects updated_at
+DROP TRIGGER IF EXISTS update_projects_modtime ON projects;
+CREATE TRIGGER update_projects_modtime
+    BEFORE UPDATE ON projects
+    FOR EACH ROW
+    EXECUTE FUNCTION update_modified_column();
+
+-- REVIEWS TABLE
+CREATE TABLE IF NOT EXISTS reviews (
+    id SERIAL PRIMARY KEY,
+    project_id INT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    review_type VARCHAR(50) NOT NULL, -- 'snippet' or 'file'
+    overall_score INT NOT NULL DEFAULT 100, -- Score from 0 to 100
+    summary TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- REVIEW FINDINGS TABLE
+CREATE TABLE IF NOT EXISTS review_findings (
+    id SERIAL PRIMARY KEY,
+    review_id INT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+    severity VARCHAR(20) NOT NULL, -- 'error', 'warning', 'info'
+    issue TEXT NOT NULL,
+    explanation TEXT,
+    suggested_fix TEXT,
+    file_name VARCHAR(255),
+    line_number INT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- PASSWORD RESETS TABLE
+CREATE TABLE IF NOT EXISTS password_resets (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+    token VARCHAR(255) UNIQUE NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    used BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- INDEXES TO OPTIMIZE JOIN AND LOOKUP QUERIES
+CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_reviews_project_id ON reviews(project_id);
+CREATE INDEX IF NOT EXISTS idx_review_findings_review_id ON review_findings(review_id);
+CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets(token);
+CREATE INDEX IF NOT EXISTS idx_password_resets_email ON password_resets(email);
