@@ -13,10 +13,18 @@ if (!connectionString) {
 // Create connection pool
 const pool = new Pool({
   connectionString,
-  ssl: connectionString.includes('supabase') || connectionString.includes('render') || connectionString.includes('railway')
+  ssl: connectionString.includes('supabase') || 
+       connectionString.includes('render') || 
+       connectionString.includes('railway') || 
+       connectionString.includes('neon')
     ? { rejectUnauthorized: false }
     : false
 });
+
+// Test database connection on startup
+pool.query('SELECT NOW()')
+  .then(() => console.log('DB connected successfully'))
+  .catch(err => console.error('Database connection test failed:', err.message));
 
 // Database query wrapper
 const query = (text, params) => pool.query(text, params);

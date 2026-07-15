@@ -39,12 +39,16 @@ CREATE TABLE IF NOT EXISTS projects (
     user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     project_name VARCHAR(100) NOT NULL,
     github_url VARCHAR(255),
+    file_path VARCHAR(255),
+    language VARCHAR(50),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Handle schema migration for existing databases missing updated_at
+-- Handle schema migration for existing databases
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS file_path VARCHAR(255);
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS language VARCHAR(50);
 
 -- Trigger for projects updated_at
 DROP TRIGGER IF EXISTS update_projects_modtime ON projects;

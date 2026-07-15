@@ -45,6 +45,8 @@ app.get('/api/health', (req, res) => {
 
 // Register Routes
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/projects', require('./routes/projects'));
+app.use('/api/reviews', require('./routes/reviews'));
 
 // Global Error Handler
 app.use((err, req, res, next) => {
@@ -55,4 +57,25 @@ app.use((err, req, res, next) => {
 // Start Server
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode.`);
+
+  // Startup CLI Linter Availability Diagnostics
+  const { exec } = require('child_process');
+  const path = require('path');
+  const eslintBin = path.resolve(__dirname, 'node_modules', 'eslint', 'bin', 'eslint.js');
+
+  exec(`node "${eslintBin}" --version`, (err) => {
+    if (err) {
+      console.error("WARNING: ESLint local binary is not available or not installed. Static analysis of JavaScript/TypeScript files will fail.");
+    } else {
+      console.log("Startup Check: ESLint CLI is available and ready.");
+    }
+  });
+
+  exec('python -m pylint --version', (err) => {
+    if (err) {
+      console.error("WARNING: Python/Pylint CLI wrapper is not available. Static analysis of Python files will fail.");
+    } else {
+      console.log("Startup Check: Pylint CLI is available and ready.");
+    }
+  });
 });
