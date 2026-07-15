@@ -6,6 +6,7 @@ const multer = require('multer');
 const db = require('../db');
 const auth = require('../middleware/auth');
 const { runESLint, runPylint } = require('../utils/analyzer');
+const { getAIReview } = require('../utils/ai');
 
 // Language-to-file-extension mapping
 const getExtension = (language) => {
@@ -221,8 +222,9 @@ router.get('/', auth, async (req, res) => {
     const userId = req.user.id;
     const result = await db.query(
       `SELECT p.id, p.project_name, p.language, p.file_path, p.created_at,
-         (SELECT overall_score FROM reviews r WHERE r.project_id = p.id AND r.review_type = 'static' ORDER BY r.created_at DESC LIMIT 1) as quality_score,
-         (SELECT id FROM reviews r WHERE r.project_id = p.id AND r.review_type = 'static' ORDER BY r.created_at DESC LIMIT 1) as latest_review_id
+         (SELECT overall_score FROM reviews r WHERE r.project_id = p.id ORDER BY r.created_at DESC LIMIT 1) as quality_score,
+         (SELECT id FROM reviews r WHERE r.project_id = p.id ORDER BY r.created_at DESC LIMIT 1) as latest_review_id,
+         (SELECT summary FROM reviews r WHERE r.project_id = p.id ORDER BY r.created_at DESC LIMIT 1) as latest_review_summary
        FROM projects p
        WHERE p.user_id = $1
        ORDER BY p.created_at DESC`,
@@ -391,6 +393,185 @@ router.post('/:id/analyze', auth, async (req, res) => {
   } catch (err) {
     console.error('Project Analysis Error:', err.stack || err.message);
     res.status(500).json({ message: 'Server error during static code analysis execution' });
+  }
+});
+
+// @route   POST api/projects/:id/ai-review
+// @desc    Trigger AI code review on a project file
+// @access  Private (Owner only)
+router.post('/:id/ai-review', auth, async (req, res) => {
+  const projectId = req.params.id;
+  const userId = req.user.id;
+
+  try {
+    // 1. Fetch the project and verify ownership
+    const projectResult = await db.query(
+      'SELECT * FROM projects WHERE id = $1 AND user_id = $2',
+      [projectId, userId]
+    );
+
+    if (projectResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Project not found or authorization denied' });
+    }
+
+    const project = projectResult.rows[0];
+    const absoluteFilePath = path.join(__dirname, '..', project.file_path);
+
+    // 2. Validate file existence on disk
+    if (!fs.existsSync(absoluteFilePath)) {
+      return res.status(404).json({ message: 'Project source code file is missing on disk' });
+    }
+
+    // Enforce 50KB size limit for AI review requests
+    const fileSize = fs.statSync(absoluteFilePath).size;
+    if (fileSize > 50 * 1024) {
+      return res.status(400).json({ message: 'File size exceeds AI review limit of 50KB.' });
+    }
+
+    const codeContent = fs.readFileSync(absoluteFilePath, 'utf8');
+
+    // Fetch latest static review findings for context
+    let staticFindings = [];
+    try {
+      const staticReviewResult = await db.query(
+        `SELECT severity, issue, explanation, line_number 
+         FROM review_findings 
+         WHERE review_id = (
+           SELECT id FROM reviews 
+           WHERE project_id = $1 AND review_type = 'static' 
+           ORDER BY created_at DESC LIMIT 1
+         )`,
+        [projectId]
+      );
+      staticFindings = staticReviewResult.rows;
+    } catch (dbErr) {
+      console.warn("Could not retrieve static linter context for AI review:", dbErr.message);
+    }
+
+    // 3. Call AI Review utility
+    let findings = [];
+    try {
+      findings = await getAIReview(codeContent, project.language || 'javascript', staticFindings);
+    } catch (aiErr) {
+      console.error('Gemini API review execution failed:', aiErr.message);
+      
+      // Handle timeout specifically
+      if (aiErr.message === 'TIMEOUT') {
+        return res.status(504).json({
+          message: 'AI review request timed out after 15 seconds.'
+        });
+      }
+
+      // Handle rate limits (429 status code) specifically
+      if (aiErr.message.includes('429') || aiErr.status === 429) {
+        return res.status(429).json({
+          message: 'AI review rate limit reached. Please try again shortly.'
+        });
+      }
+
+      return res.status(502).json({
+        message: `AI review service failed: ${aiErr.message}`
+      });
+    }
+
+    // 4. Compute scoring and counts
+    let errors = 0;
+    let warnings = 0;
+    let info = 0;
+
+    findings.forEach(f => {
+      if (f.severity === 'error') {
+        errors++;
+      } else if (f.severity === 'warning') {
+        warnings++;
+      } else {
+        info++;
+      }
+    });
+
+    const overallScore = Math.max(0, 100 - (errors * 10 + warnings * 3 + info * 1));
+    const summary = `AI Review: ${errors} errors, ${warnings} warnings, ${info} suggestions found.`;
+
+    // 5. Store AI Review using database transaction
+    const client = await db.pool.connect();
+    let newReview = null;
+
+    try {
+      await client.query('BEGIN');
+
+      // Insert AI Review record
+      const reviewResult = await client.query(
+        'INSERT INTO reviews (project_id, review_type, overall_score, summary) VALUES ($1, $2, $3, $4) RETURNING id, project_id, review_type, overall_score, summary, created_at',
+        [projectId, 'ai', overallScore, summary]
+      );
+      newReview = reviewResult.rows[0];
+
+      // Insert findings
+      const fileName = path.basename(project.file_path);
+      for (const finding of findings) {
+        await client.query(
+          'INSERT INTO review_findings (review_id, severity, issue, explanation, suggested_fix, file_name, line_number) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+          [
+            newReview.id, 
+            finding.severity || 'info', 
+            finding.issue || 'ai-suggestion', 
+            finding.explanation || 'AI review finding', 
+            finding.suggested_fix || null, 
+            fileName, 
+            finding.line_number || 1
+          ]
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
+    }
+
+    // 6. Return response
+    res.json({
+      ...newReview,
+      findings
+    });
+
+  } catch (err) {
+    console.error('AI Review Route Error:', err.message);
+    res.status(500).json({ message: 'Server error triggering AI code review' });
+  }
+});
+
+// @route   GET api/projects/:id/reviews
+// @desc    List all reviews associated with a specific project
+// @access  Private (Owner only)
+router.get('/:id/reviews', auth, async (req, res) => {
+  const projectId = req.params.id;
+  const userId = req.user.id;
+
+  try {
+    // 1. Fetch the project and verify ownership
+    const projectResult = await db.query(
+      'SELECT id FROM projects WHERE id = $1 AND user_id = $2',
+      [projectId, userId]
+    );
+
+    if (projectResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Project not found or authorization denied' });
+    }
+
+    // 2. Fetch all reviews associated with this project
+    const reviewsResult = await db.query(
+      'SELECT id, review_type, overall_score, summary, created_at FROM reviews WHERE project_id = $1 ORDER BY created_at DESC',
+      [projectId]
+    );
+
+    res.json(reviewsResult.rows);
+
+  } catch (err) {
+    console.error('List Project Reviews Error:', err.message);
+    res.status(500).json({ message: 'Server error retrieving project reviews' });
   }
 });
 

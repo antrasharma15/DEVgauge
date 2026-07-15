@@ -15,14 +15,14 @@ import {
   Clock, 
   AlertTriangle, 
   FileCode,
-  ArrowRight,
-  TrendingUp,
-  FolderOpen,
   Calendar,
   Code,
   Loader2,
   ChevronRight,
-  Play
+  Play,
+  CheckCircle2,
+  FolderOpen,
+  TrendingUp
 } from "lucide-react";
 import PasteCode from "../components/PasteCode";
 import UploadCode from "../components/UploadCode";
@@ -38,6 +38,7 @@ interface Project {
   created_at: string;
   quality_score: number | null;
   latest_review_id: number | null;
+  latest_review_summary: string | null;
 }
 
 export default function Dashboard() {
@@ -51,9 +52,17 @@ export default function Dashboard() {
   const [loadingCode, setLoadingCode] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'paste' | 'upload'>('paste');
   const [activeReviewId, setActiveReviewId] = useState<number | null>(null);
+  
+  // Analysis running states
   const [analyzing, setAnalyzing] = useState<boolean>(false);
+  const [runningAI, setRunningAI] = useState<boolean>(false);
+  
   const [fetchingProjects, setFetchingProjects] = useState<boolean>(true);
   const [dashboardTab, setDashboardTab] = useState<'dashboard' | 'history'>('dashboard');
+  
+  // Reviews history list for the selected project
+  const [projectReviews, setProjectReviews] = useState<any[]>([]);
+  const [fetchingReviews, setFetchingReviews] = useState<boolean>(false);
 
   // Protect Route
   useEffect(() => {
@@ -84,26 +93,39 @@ export default function Dashboard() {
     }
   }, [user]);
 
-  // Fetch project code content
+  // Fetch project code content and reviews list
   const handleSelectProject = async (project: Project) => {
     setSelectedProject(project);
     setProjectCode("");
     setLoadingCode(true);
     setActiveReviewId(null);
+    setProjectReviews([]);
+    setFetchingReviews(true);
+
     try {
       const token = localStorage.getItem('devgauge_token');
-      const response = await axios.get(`${API_URL}/api/projects/${project.id}`, {
+      
+      const codePromise = axios.get(`${API_URL}/api/projects/${project.id}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      setProjectCode(response.data.code);
+      
+      const reviewsPromise = axios.get(`${API_URL}/api/projects/${project.id}/reviews`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      const [codeRes, reviewsRes] = await Promise.all([codePromise, reviewsPromise]);
+      
+      setProjectCode(codeRes.data.code);
+      setProjectReviews(reviewsRes.data);
     } catch (err) {
-      console.error("Error fetching project code:", err);
+      console.error("Error fetching project details:", err);
     } finally {
       setLoadingCode(false);
+      setFetchingReviews(false);
     }
   };
 
-  // Run linter analysis
+  // Run static linter analysis
   const runStaticAnalysis = async (projectId: number) => {
     setAnalyzing(true);
     try {
@@ -111,8 +133,14 @@ export default function Dashboard() {
       const response = await axios.post(`${API_URL}/api/projects/${projectId}/analyze`, null, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
+      
       setActiveReviewId(response.data.id);
       fetchProjects(); // Refresh sidebar scores
+      
+      const reviewsRes = await axios.get(`${API_URL}/api/projects/${projectId}/reviews`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      setProjectReviews(reviewsRes.data);
     } catch (err: any) {
       console.error("Analysis trigger error:", err);
       alert(err.response?.data?.message || "Linter execution failed.");
@@ -121,20 +149,88 @@ export default function Dashboard() {
     }
   };
 
-  if (loading || !user) {
-    return (
-      <div className="min-h-screen bg-zinc-950 flex items-center justify-center font-sans text-zinc-400">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-violet-600 to-cyan-500 flex items-center justify-center animate-pulse shadow-lg shadow-violet-600/20">
-            <Terminal className="w-6 h-6 text-white" />
-          </div>
-          <p className="text-sm font-medium animate-pulse">Loading workspace...</p>
-        </div>
-      </div>
-    );
-  }
+  // Run AI review analysis (Prompt 4)
+  const runAIReview = async (projectId: number) => {
+    setRunningAI(true);
+    try {
+      const token = localStorage.getItem('devgauge_token');
+      const response = await axios.post(`${API_URL}/api/projects/${projectId}/ai-review`, null, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      setActiveReviewId(response.data.id);
+      fetchProjects();
+      
+      const reviewsRes = await axios.get(`${API_URL}/api/projects/${projectId}/reviews`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      setProjectReviews(reviewsRes.data);
+    } catch (err: any) {
+      console.error("AI Review trigger error:", err);
+      alert(err.response?.data?.message || "AI review execution failed.");
+    } finally {
+      setRunningAI(false);
+    }
+  };
 
-  // Calculate high-level stats from user projects list
+  // Format the small badge summarizing the latest review (Prompt 2)
+  const renderLatestReviewBadge = (summary: string | null) => {
+    if (!summary) {
+      return (
+        <span className="px-2 py-0.5 rounded text-[10px] bg-zinc-900 border border-zinc-800 text-zinc-500 shrink-0">
+          Not analyzed yet
+        </span>
+      );
+    }
+
+    const cleanSummary = summary.toLowerCase();
+    
+    // Check if clean code (0 errors, 0 warnings, or clean text)
+    if (cleanSummary.includes("0 errors, 0 warnings") || cleanSummary.includes("no issues found")) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-emerald-950/20 text-emerald-400 border border-emerald-900/20 shrink-0">
+          No issues
+        </span>
+      );
+    }
+
+    // Extract counts if present
+    const errMatch = summary.match(/(\d+)\s+errors?/i);
+    const warnMatch = summary.match(/(\d+)\s+warnings?/i);
+    const errors = errMatch ? parseInt(errMatch[1]) : 0;
+    const warnings = warnMatch ? parseInt(warnMatch[1]) : 0;
+
+    if (errors > 0 || warnings > 0) {
+      const parts = [];
+      if (errors > 0) parts.push(`${errors} errors`);
+      if (warnings > 0) parts.push(`${warnings} warnings`);
+      
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[10px] font-bold bg-amber-950/25 text-amber-400 border border-amber-900/20 shrink-0">
+          {parts.join(", ")}
+        </span>
+      );
+    }
+
+    // Fallback display
+    return (
+      <span className="px-2.5 py-0.5 rounded text-[10px] bg-violet-950/20 text-violet-400 border border-violet-900/20 shrink-0 truncate max-w-[120px]">
+        {summary}
+      </span>
+    );
+  };
+
+  // Handle clicking a project in the list (Prompt 2)
+  const handleProjectClick = (p: Project) => {
+    if (p.latest_review_id) {
+      // Navigates directly to /reviews/:id
+      router.push(`/reviews/${p.latest_review_id}`);
+    } else {
+      // Load details into workspace to analyze
+      handleSelectProject(p);
+    }
+  };
+
   const totalAudits = projects.length;
   const auditedCount = projects.filter(p => p.quality_score !== null).length;
   const averageScore = auditedCount > 0 
@@ -202,11 +298,11 @@ export default function Dashboard() {
         <div className="p-4 border-t border-zinc-900 bg-zinc-950/40 flex flex-col gap-3">
           <div className="flex items-center gap-3 px-2">
             <div className="w-9 h-9 rounded-full bg-zinc-850 border border-zinc-700/80 flex items-center justify-center text-zinc-300 font-bold uppercase shrink-0">
-              {user.name.charAt(0)}
+              {user?.name?.charAt(0) || "U"}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold text-zinc-200 truncate">{user.name}</p>
-              <p className="text-[10px] text-zinc-500 truncate">{user.email}</p>
+              <p className="text-xs font-semibold text-zinc-200 truncate">{user?.name || "User"}</p>
+              <p className="text-[10px] text-zinc-500 truncate">{user?.email || ""}</p>
             </div>
           </div>
           <button 
@@ -235,7 +331,7 @@ export default function Dashboard() {
           <div className="flex items-center gap-3">
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-zinc-800 bg-zinc-900/60 text-zinc-400 text-xs font-medium">
               <Clock className="w-3.5 h-3.5 text-violet-500" />
-              Linter Pipeline Active
+              Linter & Gemini Engines Active
             </div>
           </div>
         </header>
@@ -250,9 +346,9 @@ export default function Dashboard() {
               <div className="p-6 rounded-2xl border border-violet-500/10 bg-violet-950/5 relative overflow-hidden flex justify-between items-center">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-violet-600/5 rounded-full blur-2xl pointer-events-none" />
                 <div className="flex flex-col gap-1.5 relative z-10">
-                  <h2 className="text-xl font-bold text-white">Hello, {user.name}!</h2>
+                  <h2 className="text-xl font-bold text-white">Hello, {user?.name || "User"}!</h2>
                   <p className="text-sm text-zinc-400 max-w-xl">
-                    Ready to audit some code? Paste a code snippet or upload a file below to instantly trigger our static analysis engine.
+                    Ready to audit some code? Paste a code snippet or upload a file below to instantly trigger our static and AI analysis engines.
                   </p>
                 </div>
               </div>
@@ -335,60 +431,100 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Right Panel: Analysis Actions (takes 1 col) */}
-              <div className="p-6 rounded-2xl border border-zinc-900 bg-zinc-900/10 backdrop-blur-md flex flex-col justify-between gap-6 min-h-[300px]">
-                <div className="flex flex-col gap-4">
-                  <h3 className="font-bold text-white text-sm border-b border-zinc-900 pb-4 flex items-center gap-2">
+              {/* Right Panel: Analysis Actions & History (takes 1 col) */}
+              <div className="p-6 rounded-2xl border border-zinc-900 bg-zinc-900/10 backdrop-blur-md flex flex-col justify-between gap-6 min-h-[460px]">
+                <div className="flex flex-col gap-5.5">
+                  <h3 className="font-bold text-white text-sm border-b border-zinc-900 pb-3.5 flex items-center gap-2">
                     <Cpu className="w-4 h-4 text-violet-500" />
                     Audit Controls
                   </h3>
 
-                  {/* Existing Review Info */}
-                  {selectedProject.quality_score !== null ? (
-                    <div className="p-4 rounded-xl border border-emerald-500/10 bg-emerald-950/5 flex flex-col gap-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider">Latest Quality Score</span>
-                        <span className="text-sm font-black text-white px-2 py-0.5.5 rounded bg-emerald-500/10 border border-emerald-500/20">{selectedProject.quality_score}/100</span>
+                  {/* Dynamic Audit Runs History List */}
+                  <div className="flex flex-col gap-2">
+                    <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Audit History Log</span>
+                    {fetchingReviews ? (
+                      <div className="py-8 text-center text-xs text-zinc-650 flex items-center justify-center gap-1.5">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-500" /> Loading runs...
                       </div>
-                      <p className="text-[10px] text-zinc-400">This code has already been scanned. Click below to view the detailed linter results.</p>
-                      
-                      <button 
-                        onClick={() => {
-                          if (selectedProject.latest_review_id) {
-                            setActiveReviewId(selectedProject.latest_review_id);
-                          }
-                        }}
-                        className="mt-2 h-9 w-full rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 hover:text-white text-xs font-bold text-zinc-300 transition-all cursor-pointer flex items-center justify-center gap-1.5"
-                      >
-                        View Linter Findings <ChevronRight className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-950/40 flex flex-col gap-1">
-                      <span className="text-xs font-bold text-zinc-400">Analysis Pending</span>
-                      <p className="text-[10px] text-zinc-500 leading-normal">This project hasn't been scanned. Trigger the analysis engine to inspect the file for errors, warnings, and style conventions.</p>
-                    </div>
-                  )}
+                    ) : projectReviews.length === 0 ? (
+                      <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-950/40 text-[10px] text-zinc-500 leading-relaxed">
+                        This project has no past review runs. Trigger the linter or AI review engines below.
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-2 max-h-[190px] overflow-y-auto scrollbar-thin">
+                        {projectReviews.map((rev) => (
+                          <div 
+                            key={rev.id}
+                            onClick={() => setActiveReviewId(rev.id)}
+                            className="p-3 rounded-xl border border-zinc-900 bg-zinc-950/20 hover:border-zinc-850 hover:bg-zinc-950/40 flex justify-between items-center transition-all duration-150 cursor-pointer group"
+                          >
+                            <div className="flex flex-col text-left min-w-0 pr-2">
+                              <span className="text-[10px] font-semibold text-zinc-350 group-hover:text-white transition-colors truncate">
+                                {new Date(rev.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                              </span>
+                              <span className="text-[9px] text-zinc-550 group-hover:text-zinc-400 transition-colors truncate mt-0.5">
+                                <span className={`font-bold mr-1 ${rev.review_type === 'ai' ? 'text-pink-400/90' : 'text-cyan-400/90'}`}>
+                                  [{rev.review_type === 'ai' ? 'AI' : 'Linter'}]
+                                </span>
+                                {rev.summary}
+                              </span>
+                            </div>
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border shrink-0 ${
+                              rev.overall_score >= 90 
+                                ? 'bg-emerald-950/20 text-emerald-400 border-emerald-900/20' 
+                                : rev.overall_score >= 70 
+                                ? 'bg-violet-950/20 text-violet-400 border-violet-900/20'
+                                : 'bg-amber-950/20 text-amber-400 border-amber-900/20'
+                            }`}>
+                              {rev.overall_score}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {/* Primary Action Button */}
-                <button
-                  onClick={() => runStaticAnalysis(selectedProject.id)}
-                  disabled={analyzing || loadingCode}
-                  className="flex items-center justify-center gap-2 h-11 w-full rounded-xl bg-gradient-to-r from-violet-600 to-cyan-600 text-white text-sm font-bold shadow-lg shadow-violet-600/15 hover:scale-[1.01] hover:shadow-violet-600/25 active:scale-[0.99] disabled:opacity-50 disabled:pointer-events-none transition-all duration-200 cursor-pointer"
-                >
-                  {analyzing ? (
-                    <>
-                      <Loader2 className="w-4.5 h-4.5 animate-spin" />
-                      Running static analysis...
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-4 h-4 fill-current text-white" />
-                      Run Linter Audit
-                    </>
-                  )}
-                </button>
+                {/* Auditing Triggers */}
+                <div className="flex flex-col gap-2 shrink-0">
+                  {/* Linter Trigger Button */}
+                  <button
+                    onClick={() => runStaticAnalysis(selectedProject.id)}
+                    disabled={analyzing || runningAI || loadingCode}
+                    className="flex items-center justify-center gap-2 h-10 w-full rounded-xl bg-gradient-to-r from-violet-600 to-cyan-600 text-white text-xs font-bold shadow-lg shadow-violet-600/15 hover:scale-[1.01] hover:shadow-violet-600/25 active:scale-[0.99] disabled:opacity-50 disabled:pointer-events-none transition-all duration-200 cursor-pointer"
+                  >
+                    {analyzing ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Running Linter...
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-3.5 h-3.5 fill-current text-white" />
+                        Run Linter Audit
+                      </>
+                    )}
+                  </button>
+
+                  {/* AI Review Trigger Button (Prompt 4) */}
+                  <button
+                    onClick={() => runAIReview(selectedProject.id)}
+                    disabled={analyzing || runningAI || loadingCode}
+                    className="flex items-center justify-center gap-2 h-10 w-full rounded-xl bg-gradient-to-r from-pink-600 to-violet-600 text-white text-xs font-bold shadow-lg shadow-pink-600/15 hover:scale-[1.01] hover:shadow-pink-600/25 active:scale-[0.99] disabled:opacity-50 disabled:pointer-events-none transition-all duration-200 cursor-pointer"
+                  >
+                    {runningAI ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Generating AI...
+                      </>
+                    ) : (
+                      <>
+                        <Cpu className="w-4 h-4 text-white" />
+                        Run AI Review
+                      </>
+                    )}
+                  </button>
+                </div>
 
               </div>
             </div>
@@ -401,20 +537,20 @@ export default function Dashboard() {
                   <Loader2 className="w-4 h-4 animate-spin text-violet-500" /> Fetching projects...
                 </div>
               ) : projects.length === 0 ? (
-                <p className="py-10 text-center text-xs text-zinc-600">No project audit records found.</p>
+                <p className="py-10 text-center text-xs text-zinc-655">No project audit records found.</p>
               ) : (
                 <div className="flex flex-col gap-3">
                   {projects.map((p) => (
                     <div 
                       key={p.id}
-                      onClick={() => handleSelectProject(p)}
+                      onClick={() => handleProjectClick(p)}
                       className="p-4 rounded-xl border border-zinc-900 bg-zinc-950/20 hover:border-zinc-800 hover:bg-zinc-950/40 flex justify-between items-center transition-all duration-150 cursor-pointer group"
                     >
                       <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-xl bg-zinc-900 border border-zinc-850 flex items-center justify-center text-zinc-500 group-hover:text-zinc-300 transition-colors">
                           <FileCode className="w-4.5 h-4.5" />
                         </div>
-                        <div className="flex flex-col">
+                        <div className="flex flex-col text-left">
                           <span className="text-xs font-semibold text-zinc-200 group-hover:text-white transition-colors">{p.project_name}</span>
                           <span className="text-[10px] text-zinc-500 flex items-center gap-2 mt-0.5">
                             <Code className="w-3 h-3 uppercase" /> {p.language} 
@@ -425,19 +561,7 @@ export default function Dashboard() {
                       </div>
                       
                       <div className="flex items-center gap-3">
-                        {p.quality_score !== null ? (
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                            p.quality_score >= 90 
-                              ? 'bg-emerald-950/20 text-emerald-400 border-emerald-900/20' 
-                              : p.quality_score >= 70 
-                              ? 'bg-violet-950/20 text-violet-400 border-violet-900/20'
-                              : 'bg-amber-950/20 text-amber-400 border-amber-900/20'
-                          }`}>
-                            {p.quality_score}/100
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded text-[10px] bg-zinc-900 border border-zinc-800 text-zinc-500">Unreviewed</span>
-                        )}
+                        {renderLatestReviewBadge(p.latest_review_summary)}
                         <ChevronRight className="w-4 h-4 text-zinc-650 group-hover:text-zinc-400 group-hover:translate-x-0.5 transition-all" />
                       </div>
                     </div>
@@ -494,7 +618,7 @@ export default function Dashboard() {
 
               </div>
 
-              {/* Sidebar Recent Audits History Area (takes 1 col) */}
+              {/* Sidebar Recent Audits History Area (takes 1 col) - Prompt 2 */}
               <div className="p-6 rounded-2xl border border-zinc-900 bg-zinc-900/10 backdrop-blur-md flex flex-col gap-4">
                 <h3 className="font-bold text-white text-sm border-b border-zinc-900 pb-4 flex items-center justify-between">
                   Recent Audits
@@ -510,7 +634,7 @@ export default function Dashboard() {
                 
                 {fetchingProjects ? (
                   <div className="py-10 flex justify-center text-xs text-zinc-500 gap-1.5">
-                    <Loader2 className="w-4 h-4 animate-spin" /> loading...
+                    <Loader2 className="w-4 h-4 animate-spin text-violet-500" /> loading...
                   </div>
                 ) : projects.length === 0 ? (
                   <div className="py-14 text-center text-xs text-zinc-650 flex flex-col items-center justify-center gap-1.5">
@@ -522,30 +646,17 @@ export default function Dashboard() {
                     {projects.slice(0, 5).map((p) => (
                       <div 
                         key={p.id}
-                        onClick={() => handleSelectProject(p)}
-                        className="p-3 rounded-xl border border-zinc-900 bg-zinc-950/20 hover:border-zinc-800 hover:bg-zinc-950/40 flex justify-between items-center transition-all duration-150 cursor-pointer group"
+                        onClick={() => handleProjectClick(p)}
+                        className="p-3 rounded-xl border border-zinc-900 bg-zinc-950/20 hover:border-zinc-850 hover:bg-zinc-950/40 flex justify-between items-center transition-all duration-150 cursor-pointer group"
                       >
-                        <div className="flex items-center gap-2 text-left min-w-0">
+                        <div className="flex items-center gap-2 text-left min-w-0 pr-1">
                           <FileCode className="w-4 h-4 text-violet-400 shrink-0" />
                           <div className="flex flex-col min-w-0">
                             <span className="text-[11px] font-semibold text-zinc-300 group-hover:text-white transition-colors truncate">{p.project_name}</span>
                             <span className="text-[9px] text-zinc-600 uppercase font-bold">{p.language}</span>
                           </div>
                         </div>
-
-                        {p.quality_score !== null ? (
-                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border shrink-0 ${
-                            p.quality_score >= 90 
-                              ? 'bg-emerald-950/20 text-emerald-400 border-emerald-900/20' 
-                              : p.quality_score >= 70 
-                              ? 'bg-violet-950/20 text-violet-400 border-violet-900/20'
-                              : 'bg-amber-950/20 text-amber-400 border-amber-900/20'
-                          }`}>
-                            {p.quality_score}
-                          </span>
-                        ) : (
-                          <span className="px-1.5 py-0.5 rounded text-[9px] bg-zinc-900 border border-zinc-850 text-zinc-600 shrink-0">Unrated</span>
-                        )}
+                        {renderLatestReviewBadge(p.latest_review_summary)}
                       </div>
                     ))}
                   </div>
