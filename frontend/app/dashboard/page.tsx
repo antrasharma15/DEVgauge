@@ -22,7 +22,8 @@ import {
   Play,
   CheckCircle2,
   FolderOpen,
-  TrendingUp
+  TrendingUp,
+  Hash
 } from "lucide-react";
 import PasteCode from "../components/PasteCode";
 import UploadCode from "../components/UploadCode";
@@ -56,6 +57,7 @@ export default function Dashboard() {
   // Analysis running states
   const [analyzing, setAnalyzing] = useState<boolean>(false);
   const [runningAI, setRunningAI] = useState<boolean>(false);
+  const [runningComplexity, setRunningComplexity] = useState<boolean>(false);
   
   const [fetchingProjects, setFetchingProjects] = useState<boolean>(true);
   const [dashboardTab, setDashboardTab] = useState<'dashboard' | 'history'>('dashboard');
@@ -170,6 +172,30 @@ export default function Dashboard() {
       alert(err.response?.data?.message || "AI review execution failed.");
     } finally {
       setRunningAI(false);
+    }
+  };
+
+  // Run Complexity Analysis
+  const runComplexityAnalysis = async (projectId: number) => {
+    setRunningComplexity(true);
+    try {
+      const token = localStorage.getItem('devgauge_token');
+      const response = await axios.post(`${API_URL}/api/projects/${projectId}/complexity`, null, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      setActiveReviewId(response.data.review.id);
+      fetchProjects();
+      
+      const reviewsRes = await axios.get(`${API_URL}/api/projects/${projectId}/reviews`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      setProjectReviews(reviewsRes.data);
+    } catch (err: any) {
+      console.error("Complexity trigger error:", err);
+      alert(err.response?.data?.message || "Complexity analysis execution failed.");
+    } finally {
+      setRunningComplexity(false);
     }
   };
 
@@ -488,9 +514,9 @@ export default function Dashboard() {
                 {/* Auditing Triggers */}
                 <div className="flex flex-col gap-2 shrink-0">
                   {/* Linter Trigger Button */}
-                  <button
+                   <button
                     onClick={() => runStaticAnalysis(selectedProject.id)}
-                    disabled={analyzing || runningAI || loadingCode}
+                    disabled={analyzing || runningAI || runningComplexity || loadingCode}
                     className="flex items-center justify-center gap-2 h-10 w-full rounded-xl bg-gradient-to-r from-violet-600 to-cyan-600 text-white text-xs font-bold shadow-lg shadow-violet-600/15 hover:scale-[1.01] hover:shadow-violet-600/25 active:scale-[0.99] disabled:opacity-50 disabled:pointer-events-none transition-all duration-200 cursor-pointer"
                   >
                     {analyzing ? (
@@ -509,7 +535,7 @@ export default function Dashboard() {
                   {/* AI Review Trigger Button (Prompt 4) */}
                   <button
                     onClick={() => runAIReview(selectedProject.id)}
-                    disabled={analyzing || runningAI || loadingCode}
+                    disabled={analyzing || runningAI || runningComplexity || loadingCode}
                     className="flex items-center justify-center gap-2 h-10 w-full rounded-xl bg-gradient-to-r from-pink-600 to-violet-600 text-white text-xs font-bold shadow-lg shadow-pink-600/15 hover:scale-[1.01] hover:shadow-pink-600/25 active:scale-[0.99] disabled:opacity-50 disabled:pointer-events-none transition-all duration-200 cursor-pointer"
                   >
                     {runningAI ? (
@@ -521,6 +547,25 @@ export default function Dashboard() {
                       <>
                         <Cpu className="w-4 h-4 text-white" />
                         Run AI Review
+                      </>
+                    )}
+                  </button>
+
+                  {/* Complexity Trigger Button (Day 9) */}
+                  <button
+                    onClick={() => runComplexityAnalysis(selectedProject.id)}
+                    disabled={analyzing || runningAI || runningComplexity || loadingCode}
+                    className="flex items-center justify-center gap-2 h-10 w-full rounded-xl bg-gradient-to-r from-cyan-600 to-emerald-600 text-white text-xs font-bold shadow-lg shadow-cyan-600/15 hover:scale-[1.01] hover:shadow-cyan-600/25 active:scale-[0.99] disabled:opacity-50 disabled:pointer-events-none transition-all duration-200 cursor-pointer"
+                  >
+                    {runningComplexity ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Analyzing Complexity...
+                      </>
+                    ) : (
+                      <>
+                        <Hash className="w-4 h-4 text-white" />
+                        Run Complexity Scan
                       </>
                     )}
                   </button>

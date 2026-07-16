@@ -5,6 +5,7 @@ import axios from 'axios';
 import { Loader2, AlertOctagon, ArrowLeft, X } from 'lucide-react';
 import ReviewSummaryCard from './ReviewSummaryCard';
 import FindingsTable from './FindingsTable';
+import ComplexityDashboard from './ComplexityDashboard';
 
 interface Finding {
   id: number;
@@ -24,6 +25,16 @@ interface Review {
   summary: string;
   created_at: string;
   findings: Finding[];
+  complexity_metrics?: {
+    id: number;
+    review_id: number;
+    cyclomatic_complexity: number;
+    avg_function_complexity: string | number;
+    file_complexity: number;
+    num_functions: number;
+    num_classes: number;
+    lines_of_code: number;
+  };
 }
 
 interface ReviewResultsProps {
@@ -116,9 +127,42 @@ export default function ReviewResults({ reviewId, onClose }: ReviewResultsProps)
     );
   }
 
+  const isComplexity = review.review_type === 'complexity';
+
   const errorCount = review.findings.filter(f => f.severity === 'error').length;
   const warningCount = review.findings.filter(f => f.severity === 'warning').length;
   const infoCount = review.findings.filter(f => f.severity === 'info').length;
+
+  // Format complexity data if complexity review type
+  let complexityMetrics: any = null;
+  if (isComplexity) {
+    const parsedFunctions = review.findings
+      .filter(f => f.issue === 'function-complexity')
+      .map(f => {
+        const nameMatch = f.explanation.match(/Function '([^']+)'/);
+        const compMatch = f.explanation.match(/complexity of (\d+)/);
+        const rangeMatch = f.suggested_fix ? f.suggested_fix.match(/Line (\d+) to (\d+)/) : null;
+        
+        return {
+          name: nameMatch ? nameMatch[1] : 'anonymous',
+          complexity: compMatch ? parseInt(compMatch[1]) : 1,
+          lineStart: rangeMatch ? parseInt(rangeMatch[1]) : f.line_number,
+          lineEnd: rangeMatch ? parseInt(rangeMatch[2]) : f.line_number
+        };
+      });
+
+    complexityMetrics = {
+      cyclomatic_complexity: review.complexity_metrics?.cyclomatic_complexity || 1,
+      avg_function_complexity: typeof review.complexity_metrics?.avg_function_complexity === 'string'
+        ? parseFloat(review.complexity_metrics.avg_function_complexity)
+        : review.complexity_metrics?.avg_function_complexity || 1.00,
+      file_complexity: review.complexity_metrics?.file_complexity || 1,
+      num_functions: review.complexity_metrics?.num_functions || 0,
+      num_classes: review.complexity_metrics?.num_classes || 0,
+      lines_of_code: review.complexity_metrics?.lines_of_code || 0,
+      functions: parsedFunctions
+    };
+  }
 
   return (
     <div className="flex flex-col gap-6 text-zinc-200 animate-in fade-in duration-200">
@@ -137,27 +181,34 @@ export default function ReviewResults({ reviewId, onClose }: ReviewResultsProps)
           )}
           <div>
             <h2 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
-              Review Audit Findings
+              {isComplexity ? 'Code Complexity Analysis Report' : 'Review Audit Findings'}
             </h2>
             <p className="text-xs text-zinc-500">Record ID: #{review.id} • Created: {new Date(review.created_at).toLocaleString()}</p>
           </div>
         </div>
       </div>
 
-      {/* Composed Summary Card (Prompt 3) */}
-      <ReviewSummaryCard 
-        overallScore={review.overall_score}
-        summary={review.summary}
-        reviewType={review.review_type}
-        errorCount={errorCount}
-        warningCount={warningCount}
-        infoCount={infoCount}
-      />
+      {isComplexity ? (
+        /* Render complexity metrics dashboard */
+        <ComplexityDashboard metrics={complexityMetrics} />
+      ) : (
+        <>
+          {/* Composed Summary Card (Prompt 3) */}
+          <ReviewSummaryCard 
+            overallScore={review.overall_score}
+            summary={review.summary}
+            reviewType={review.review_type}
+            errorCount={errorCount}
+            warningCount={warningCount}
+            infoCount={infoCount}
+          />
 
-      {/* Composed Findings Table List (Prompt 4) */}
-      <div className="mt-2">
-        <FindingsTable findings={review.findings} />
-      </div>
+          {/* Composed Findings Table List (Prompt 4) */}
+          <div className="mt-2">
+            <FindingsTable findings={review.findings} />
+          </div>
+        </>
+      )}
 
     </div>
   );

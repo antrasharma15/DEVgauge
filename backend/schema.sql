@@ -96,3 +96,19 @@ CREATE INDEX IF NOT EXISTS idx_reviews_project_id ON reviews(project_id);
 CREATE INDEX IF NOT EXISTS idx_review_findings_review_id ON review_findings(review_id);
 CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets(token);
 CREATE INDEX IF NOT EXISTS idx_password_resets_email ON password_resets(email);
+
+-- COMPLEXITY METRICS TABLE (Day 9)
+CREATE TABLE IF NOT EXISTS complexity_metrics (
+    id SERIAL PRIMARY KEY,
+    review_id INT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE UNIQUE,
+    cyclomatic_complexity INT NOT NULL,
+    avg_function_complexity NUMERIC(5,2) NOT NULL,
+    file_complexity INT NOT NULL,
+    num_functions INT NOT NULL,
+    num_classes INT NOT NULL,
+    lines_of_code INT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Index for complexity metrics review lookup
+CREATE INDEX IF NOT EXISTS idx_complexity_metrics_review_id ON complexity_metrics(review_id);

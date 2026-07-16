@@ -24,9 +24,9 @@ const callAI = async (prompt) => {
   try {
     const model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
     
-    // Create a 15-second timeout promise (15000ms)
+    // Create a 30-second timeout promise (30000ms)
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('TIMEOUT')), 15000);
+      setTimeout(() => reject(new Error('TIMEOUT')), 30000);
     });
 
     // Race model response against timeout
@@ -83,11 +83,17 @@ Please use this linter findings context to avoid duplicating simple syntax rule 
   const prompt = `You are an expert senior software developer and code reviewer.
 Analyze the following source code written in ${language} and identify issues like security vulnerabilities, logical bugs, naming violations, efficiency problems, or general code smells.${linterContextText}
 
+Specifically, you MUST analyze the code to detect and flag the following code smells:
+1. Functions longer than 50 lines (issue field value: "code-smell-long-function")
+2. Functions with more than 4 parameters (issue field value: "code-smell-excessive-parameters")
+3. Deeply nested conditionals of 3+ levels (issue field value: "code-smell-deep-nesting")
+4. Duplicate-looking code blocks within the file (issue field value: "code-smell-duplicate-code")
+
 You must respond ONLY with a valid JSON array of objects. Do not wrap the JSON output in markdown formatting. Do not include any text before or after the JSON array.
 
 Each finding object in the array must contain:
 1. severity: must be one of "error", "warning", "info"
-2. issue: a short machine-readable tag identifying the issue (e.g. "sql-injection", "unused-variable", "code-smell-nesting")
+2. issue: a short machine-readable tag identifying the issue (use "code-smell-long-function", "code-smell-deep-nesting", etc. for code smells; or other appropriate tags like "sql-injection", "unused-variable")
 3. explanation: human-readable description of the problem and its implications
 4. suggested_fix: a concrete code block or guidance showing how to fix the issue
 5. line_number: integer line number where the issue occurs (1-indexed)

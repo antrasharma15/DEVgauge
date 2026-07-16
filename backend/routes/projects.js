@@ -7,6 +7,7 @@ const db = require('../db');
 const auth = require('../middleware/auth');
 const { runESLint, runPylint } = require('../utils/analyzer');
 const { getAIReview } = require('../utils/ai');
+const { getJSComplexity, getPythonComplexity } = require('../utils/complexity');
 
 // Language-to-file-extension mapping
 const getExtension = (language) => {
@@ -458,7 +459,7 @@ router.post('/:id/ai-review', auth, async (req, res) => {
       // Handle timeout specifically
       if (aiErr.message === 'TIMEOUT') {
         return res.status(504).json({
-          message: 'AI review request timed out after 15 seconds.'
+          message: 'AI review request timed out after 30 seconds.'
         });
       }
 
@@ -540,6 +541,152 @@ router.post('/:id/ai-review', auth, async (req, res) => {
   } catch (err) {
     console.error('AI Review Route Error:', err.message);
     res.status(500).json({ message: 'Server error triggering AI code review' });
+  }
+});
+
+// @route   POST api/projects/:id/complexity
+// @desc    Trigger complexity analysis on a project file
+// @access  Private (Owner only)
+router.post('/:id/complexity', auth, async (req, res) => {
+  const projectId = req.params.id;
+  const userId = req.user.id;
+
+  try {
+    // 1. Fetch the project and verify ownership
+    const projectResult = await db.query(
+      'SELECT * FROM projects WHERE id = $1 AND user_id = $2',
+      [projectId, userId]
+    );
+
+    if (projectResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Project not found or authorization denied' });
+    }
+
+    const project = projectResult.rows[0];
+    const absoluteFilePath = path.join(__dirname, '..', project.file_path);
+
+    // 2. Validate file existence on disk
+    if (!fs.existsSync(absoluteFilePath)) {
+      return res.status(404).json({ message: 'Project source code file is missing on disk' });
+    }
+
+    // Enforce empty file validation
+    const fileSize = fs.statSync(absoluteFilePath).size;
+    if (fileSize === 0) {
+      return res.status(400).json({ message: 'Source file is empty. Cannot perform complexity analysis.' });
+    }
+
+    const language = (project.language || 'javascript').toLowerCase();
+    let metrics;
+
+    // 3. Execute appropriate complexity wrapper
+    try {
+      if (language === 'javascript' || language === 'js') {
+        const codeContent = fs.readFileSync(absoluteFilePath, 'utf8');
+        if (!codeContent.trim()) {
+          return res.status(400).json({ message: 'Source file is empty. Cannot perform complexity analysis.' });
+        }
+        metrics = getJSComplexity(codeContent);
+      } else if (language === 'python' || language === 'py') {
+        const codeContent = fs.readFileSync(absoluteFilePath, 'utf8');
+        if (!codeContent.trim()) {
+          return res.status(400).json({ message: 'Source file is empty. Cannot perform complexity analysis.' });
+        }
+        metrics = await getPythonComplexity(absoluteFilePath);
+      } else {
+        return res.status(400).json({
+          message: 'Complexity analysis is only supported for JavaScript and Python projects.'
+        });
+      }
+    } catch (analysisErr) {
+      console.error('Complexity analysis failed:', analysisErr.message);
+      return res.status(502).json({
+        message: `Complexity analysis runner failed: ${analysisErr.message}`
+      });
+    }
+
+    // 4. Save to Database inside a transaction
+    const client = await db.pool.connect();
+    let newReview;
+
+    try {
+      await client.query('BEGIN');
+
+      const avgCompText = metrics.avgFunctionComplexity.toFixed(1);
+      const summaryText = `Avg complexity: ${avgCompText}, ${metrics.numFunctions} functions, ${metrics.linesOfCode} LOC`;
+      
+      // Calculate quality score: starts at 100, deducts based on avg function complexity
+      const calculatedScore = Math.max(0, Math.min(100, Math.round(100 - (metrics.avgFunctionComplexity * 8))));
+
+      // Insert parent review row
+      const reviewInsert = await client.query(
+        `INSERT INTO reviews (project_id, review_type, overall_score, summary)
+         VALUES ($1, 'complexity', $2, $3)
+         RETURNING id, project_id, review_type, overall_score, summary, created_at`,
+        [projectId, calculatedScore, summaryText]
+      );
+      newReview = reviewInsert.rows[0];
+
+      // Insert child complexity metrics row
+      await client.query(
+        `INSERT INTO complexity_metrics (
+           review_id, cyclomatic_complexity, avg_function_complexity, 
+           file_complexity, num_functions, num_classes, lines_of_code
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          newReview.id,
+          metrics.fileComplexity,
+          metrics.avgFunctionComplexity,
+          metrics.fileComplexity,
+          metrics.numFunctions,
+          metrics.numClasses,
+          metrics.linesOfCode
+        ]
+      );
+
+      // Insert individual functions into review_findings as info findings
+      const fileName = path.basename(project.file_path);
+      for (const fn of metrics.functions) {
+        await client.query(
+          `INSERT INTO review_findings (review_id, severity, issue, explanation, suggested_fix, file_name, line_number)
+           VALUES ($1, 'info', 'function-complexity', $2, $3, $4, $5)`,
+          [
+            newReview.id,
+            `Function '${fn.name}' has cyclomatic complexity of ${fn.complexity}.`,
+            `Line ${fn.lineStart} to ${fn.lineEnd}`,
+            fileName,
+            fn.lineStart
+          ]
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
+    }
+
+    // 5. Return JSON payload
+    res.json({
+      review: newReview,
+      metrics: {
+        id: newReview.id,
+        review_id: newReview.id,
+        cyclomatic_complexity: metrics.fileComplexity,
+        avg_function_complexity: metrics.avgFunctionComplexity,
+        file_complexity: metrics.fileComplexity,
+        num_functions: metrics.numFunctions,
+        num_classes: metrics.numClasses,
+        lines_of_code: metrics.linesOfCode,
+        functions: metrics.functions
+      }
+    });
+
+  } catch (err) {
+    console.error('Complexity endpoint error:', err.message);
+    res.status(500).json({ message: 'Server error during complexity analysis execution' });
   }
 });
 
