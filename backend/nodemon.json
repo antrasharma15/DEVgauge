@@ -1,8 +1,11 @@
 {
   "ignore": [
     "uploads",
-    "uploads/**",
+    "uploads/**/*",
+    "**/uploads/**",
     "test_*",
+    "test_*.js",
     "*.log"
-  ]
+  ],
+  "verbose": true
 }

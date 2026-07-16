@@ -6,6 +6,7 @@ import { Loader2, AlertOctagon, ArrowLeft, X } from 'lucide-react';
 import ReviewSummaryCard from './ReviewSummaryCard';
 import FindingsTable from './FindingsTable';
 import ComplexityDashboard from './ComplexityDashboard';
+import DocumentationDashboard from './DocumentationDashboard';
 
 interface Finding {
   id: number;
@@ -35,6 +36,16 @@ interface Review {
     num_classes: number;
     lines_of_code: number;
   };
+  documentation_entries?: {
+    id: number;
+    review_id: number;
+    entry_type: 'file' | 'class' | 'function';
+    name: string;
+    description: string;
+    parameters: string | any[] | null;
+    returns: string | null;
+    docstring: string | null;
+  }[];
 }
 
 interface ReviewResultsProps {
@@ -118,7 +129,7 @@ export default function ReviewResults({ reviewId, onClose }: ReviewResultsProps)
         {onClose && (
           <button 
             onClick={onClose}
-            className="flex items-center gap-1.5 px-4 h-9 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-xs font-semibold text-zinc-300 transition-all cursor-pointer"
+            className="flex items-center gap-1.5 px-4 h-9 rounded-xl bg-zinc-900 border border-zinc-850 hover:bg-zinc-800 text-xs font-semibold text-zinc-350 transition-all cursor-pointer"
           >
             <ArrowLeft className="w-3.5 h-3.5" /> Back to Dashboard
           </button>
@@ -128,6 +139,7 @@ export default function ReviewResults({ reviewId, onClose }: ReviewResultsProps)
   }
 
   const isComplexity = review.review_type === 'complexity';
+  const isDocs = review.review_type === 'documentation';
 
   const errorCount = review.findings.filter(f => f.severity === 'error').length;
   const warningCount = review.findings.filter(f => f.severity === 'warning').length;
@@ -181,7 +193,11 @@ export default function ReviewResults({ reviewId, onClose }: ReviewResultsProps)
           )}
           <div>
             <h2 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
-              {isComplexity ? 'Code Complexity Analysis Report' : 'Review Audit Findings'}
+              {isComplexity 
+                ? 'Code Complexity Analysis Report' 
+                : isDocs 
+                ? 'Auto-Generated Code Documentation' 
+                : 'Review Audit Findings'}
             </h2>
             <p className="text-xs text-zinc-500">Record ID: #{review.id} • Created: {new Date(review.created_at).toLocaleString()}</p>
           </div>
@@ -191,6 +207,9 @@ export default function ReviewResults({ reviewId, onClose }: ReviewResultsProps)
       {isComplexity ? (
         /* Render complexity metrics dashboard */
         <ComplexityDashboard metrics={complexityMetrics} />
+      ) : isDocs ? (
+        /* Render documentation entries dashboard */
+        <DocumentationDashboard entries={review.documentation_entries || []} />
       ) : (
         <>
           {/* Composed Summary Card (Prompt 3) */}
@@ -209,7 +228,6 @@ export default function ReviewResults({ reviewId, onClose }: ReviewResultsProps)
           </div>
         </>
       )}
-
     </div>
   );
 }

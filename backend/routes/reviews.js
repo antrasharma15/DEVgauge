@@ -43,6 +43,15 @@ router.get('/:id', auth, async (req, res) => {
       }
     }
 
+    // If documentation review, load entries as well
+    if (review.review_type === 'documentation') {
+      const entriesResult = await db.query(
+        'SELECT id, review_id, entry_type, name, description, parameters, returns, docstring, created_at FROM documentation_entries WHERE review_id = $1 ORDER BY id ASC',
+        [reviewId]
+      );
+      review.documentation_entries = entriesResult.rows;
+    }
+
     res.json({
       ...review,
       findings: findingsResult.rows
@@ -117,6 +126,46 @@ router.get('/:id/complexity', auth, async (req, res) => {
   } catch (err) {
     console.error('Get Complexity Metrics Error:', err.message);
     res.status(500).json({ message: 'Server error retrieving complexity metrics' });
+  }
+});
+
+// @route   GET api/reviews/:id/documentation
+// @desc    Fetch documentation entries specifically for a review ID
+// @access  Private (Owner only)
+router.get('/:id/documentation', auth, async (req, res) => {
+  const reviewId = req.params.id;
+  const userId = req.user.id;
+
+  try {
+    // Verify owner permission
+    const reviewResult = await db.query(
+      `SELECT r.id, r.project_id, r.review_type, r.overall_score, r.summary, r.created_at
+       FROM reviews r
+       JOIN projects p ON r.project_id = p.id
+       WHERE r.id = $1 AND p.user_id = $2`,
+      [reviewId, userId]
+    );
+
+    if (reviewResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Review not found or authorization denied' });
+    }
+
+    const review = reviewResult.rows[0];
+
+    // Query entries
+    const entriesResult = await db.query(
+      'SELECT id, review_id, entry_type, name, description, parameters, returns, docstring, created_at FROM documentation_entries WHERE review_id = $1 ORDER BY id ASC',
+      [reviewId]
+    );
+
+    res.json({
+      review,
+      entries: entriesResult.rows
+    });
+
+  } catch (err) {
+    console.error('Get Documentation Entries Error:', err.message);
+    res.status(500).json({ message: 'Server error retrieving documentation entries' });
   }
 });
 

@@ -24,9 +24,9 @@ const callAI = async (prompt) => {
   try {
     const model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
     
-    // Create a 30-second timeout promise (30000ms)
+    // Create a 60-second timeout promise (60000ms)
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('TIMEOUT')), 30000);
+      setTimeout(() => reject(new Error('TIMEOUT')), 60000);
     });
 
     // Race model response against timeout
@@ -137,7 +137,85 @@ Please return ONLY the valid JSON array of findings. Do not include markdown cod
   }
 };
 
+/**
+ * Generates wiki-style JSON documentation for the submitted source code.
+ * 
+ * @param {string} code - Source code to document.
+ * @param {string} language - Code language (e.g. javascript, python).
+ * @returns {Promise<Object>} - Structured documentation object.
+ */
+const getAIDocumentation = async (code, language) => {
+  const prompt = `You are an expert senior software engineer and technical writer.
+Analyze the following source code written in ${language} and generate structured wiki-style documentation.
+
+You must respond ONLY with a valid JSON object. Do not wrap the JSON output in markdown formatting. Do not include any text before or after the JSON object.
+
+Expected JSON Output Schema:
+{
+  "fileSummary": "A concise paragraph explaining the high-level purpose of the entire file/module.",
+  "classes": [
+    {
+      "name": "ClassName",
+      "purpose": "What this class does and when to use it.",
+      "properties": [
+        { "name": "propertyName", "type": "string", "description": "Property description" }
+      ],
+      "methods": [
+        {
+          "name": "methodName",
+          "purpose": "Purpose of the method.",
+          "params": [
+            { "name": "paramName", "type": "string", "description": "Parameter description" }
+          ],
+          "returns": "Description of the return value",
+          "docstring": "Formatted inline docstring (e.g. JSDoc for JavaScript, docstring for Python) representing the method signature."
+        }
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "name": "functionName",
+      "purpose": "Purpose of the function.",
+      "params": [
+        { "name": "paramName", "type": "number", "description": "Parameter description" }
+      ],
+      "returns": "Description of the return value",
+      "docstring": "Formatted inline docstring (e.g. JSDoc for JavaScript, docstring for Python) representing the function signature."
+    }
+  ]
+}
+
+Analyze this code:
+\`\`\`
+${code}
+\`\`\``;
+
+  try {
+    const rawText = await callAI(prompt);
+    const cleanedText = cleanJSONResponse(rawText);
+    
+    try {
+      return JSON.parse(cleanedText);
+    } catch (parseErr) {
+      console.warn("AI response JSON parsing failed. Retrying once with a stricter instructions block...", parseErr.message);
+      
+      const retryPrompt = `${prompt}
+
+WARNING: Your previous response was not valid JSON.
+Please return ONLY the valid JSON object following the schema precisely. Do not include markdown code block fences, explanations outside the object, or any additional text. Return strictly the JSON object.`;
+
+      const retryRawText = await callAI(retryPrompt);
+      const retryCleanedText = cleanJSONResponse(retryRawText);
+      return JSON.parse(retryCleanedText);
+    }
+  } catch (err) {
+    throw new Error(`AI Documentation generation failed: ${err.message}`);
+  }
+};
+
 module.exports = {
   callAI,
-  getAIReview
+  getAIReview,
+  getAIDocumentation
 };

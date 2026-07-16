@@ -6,7 +6,7 @@ const multer = require('multer');
 const db = require('../db');
 const auth = require('../middleware/auth');
 const { runESLint, runPylint } = require('../utils/analyzer');
-const { getAIReview } = require('../utils/ai');
+const { getAIReview, getAIDocumentation } = require('../utils/ai');
 const { getJSComplexity, getPythonComplexity } = require('../utils/complexity');
 
 // Language-to-file-extension mapping
@@ -719,6 +719,202 @@ router.get('/:id/reviews', auth, async (req, res) => {
   } catch (err) {
     console.error('List Project Reviews Error:', err.message);
     res.status(500).json({ message: 'Server error retrieving project reviews' });
+  }
+});
+
+// @route   POST api/projects/:id/documentation
+// @desc    Generate documentation for a project via AI and store in documentation_entries table
+// @access  Private
+router.post('/:id/documentation', auth, async (req, res) => {
+  const projectId = req.params.id;
+  const userId = req.user.id;
+
+  try {
+    // 1. Fetch the project and verify ownership
+    const projectResult = await db.query(
+      'SELECT * FROM projects WHERE id = $1 AND user_id = $2',
+      [projectId, userId]
+    );
+
+    if (projectResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Project not found or authorization denied' });
+    }
+
+    const project = projectResult.rows[0];
+    const absoluteFilePath = path.join(__dirname, '..', project.file_path);
+
+    // 2. Validate file existence on disk
+    if (!fs.existsSync(absoluteFilePath)) {
+      return res.status(404).json({ message: 'Project source code file is missing on disk' });
+    }
+
+    // 3. Enforce size limit and empty check
+    const stats = fs.statSync(absoluteFilePath);
+    if (stats.size === 0) {
+      return res.status(400).json({ message: 'Source file is empty. Cannot generate documentation.' });
+    }
+    if (stats.size > 50 * 1024) {
+      return res.status(400).json({ message: 'Source code exceeds size limit (50KB) for AI analysis.' });
+    }
+
+    const codeContent = fs.readFileSync(absoluteFilePath, 'utf8');
+    if (!codeContent.trim()) {
+      return res.status(400).json({ message: 'Source file is empty. Cannot generate documentation.' });
+    }
+
+    // 4. Generate AI Documentation
+    let docResult;
+    try {
+      docResult = await getAIDocumentation(codeContent, project.language || 'javascript');
+    } catch (aiErr) {
+      console.error('AI Documentation engine failed:', aiErr.message);
+      
+      // Handle timeout specifically
+      if (aiErr.message === 'TIMEOUT') {
+        return res.status(504).json({
+          message: 'AI documentation request timed out after 60 seconds.'
+        });
+      }
+      
+      // Handle rate limits (429 status code)
+      if (aiErr.message.includes('429') || aiErr.status === 429) {
+        return res.status(429).json({
+          message: 'AI review rate limit reached. Please try again shortly.'
+        });
+      }
+
+      return res.status(502).json({
+        message: `AI documentation generator failed: ${aiErr.message}`
+      });
+    }
+
+    // 5. Database transaction to save review and documentation entries
+    const client = await db.pool.connect();
+    let newReview;
+    const insertedEntries = [];
+
+    try {
+      await client.query('BEGIN');
+
+      // Insert parent review row
+      const reviewInsert = await client.query(
+        `INSERT INTO reviews (project_id, review_type, overall_score, summary)
+         VALUES ($1, 'documentation', 100, $2)
+         RETURNING id, project_id, review_type, overall_score, summary, created_at`,
+        [projectId, docResult.fileSummary || 'Auto-generated documentation.']
+      );
+      newReview = reviewInsert.rows[0];
+
+      // Save file summary as an entry
+      const fileEntry = await client.query(
+        `INSERT INTO documentation_entries (review_id, entry_type, name, description, parameters, returns, docstring)
+         VALUES ($1, 'file', $2, $3, $4, $5, $6)
+         RETURNING id, review_id, entry_type, name, description, parameters, returns, docstring, created_at`,
+        [newReview.id, path.basename(project.file_path), docResult.fileSummary || '', null, null, null]
+      );
+      insertedEntries.push(fileEntry.rows[0]);
+
+      // Save classes
+      if (docResult.classes && Array.isArray(docResult.classes)) {
+        for (const cls of docResult.classes) {
+          // Light validation: check if class name exists in code
+          if (cls.name && !codeContent.includes(cls.name)) {
+            console.warn(`Filtering out hallucinated class documentation for: ${cls.name}`);
+            continue;
+          }
+
+          const classEntry = await client.query(
+            `INSERT INTO documentation_entries (review_id, entry_type, name, description, parameters, returns, docstring)
+             VALUES ($1, 'class', $2, $3, $4, $5, $6)
+             RETURNING id, review_id, entry_type, name, description, parameters, returns, docstring, created_at`,
+            [
+              newReview.id,
+              cls.name || 'AnonymousClass',
+              cls.purpose || '',
+              cls.properties ? JSON.stringify(cls.properties) : null,
+              null,
+              cls.docstring || null
+            ]
+          );
+          insertedEntries.push(classEntry.rows[0]);
+
+          // Save class methods if any
+          if (cls.methods && Array.isArray(cls.methods)) {
+            for (const method of cls.methods) {
+              // Light validation: check if method name exists in code
+              if (method.name && !codeContent.includes(method.name)) {
+                console.warn(`Filtering out hallucinated class method documentation for: ${cls.name}.${method.name}`);
+                continue;
+              }
+
+              const methodEntry = await client.query(
+                `INSERT INTO documentation_entries (review_id, entry_type, name, description, parameters, returns, docstring)
+                 VALUES ($1, 'function', $2, $3, $4, $5, $6)
+                 RETURNING id, review_id, entry_type, name, description, parameters, returns, docstring, created_at`,
+                [
+                  newReview.id,
+                  `${cls.name}.${method.name || 'anonymous'}`,
+                  method.purpose || '',
+                  method.params ? JSON.stringify(method.params) : null,
+                  method.returns || null,
+                  method.docstring || null
+                ]
+              );
+              insertedEntries.push(methodEntry.rows[0]);
+            }
+          }
+        }
+      }
+
+      // Save standalone functions
+      if (docResult.functions && Array.isArray(docResult.functions)) {
+        for (const fn of docResult.functions) {
+          // Light validation: check if function name exists in code
+          if (fn.name && !codeContent.includes(fn.name)) {
+            console.warn(`Filtering out hallucinated function documentation for: ${fn.name}`);
+            continue;
+          }
+
+          const fnEntry = await client.query(
+            `INSERT INTO documentation_entries (review_id, entry_type, name, description, parameters, returns, docstring)
+             VALUES ($1, 'function', $2, $3, $4, $5, $6)
+             RETURNING id, review_id, entry_type, name, description, parameters, returns, docstring, created_at`,
+            [
+              newReview.id,
+              fn.name || 'anonymous',
+              fn.purpose || '',
+              fn.params ? JSON.stringify(fn.params) : null,
+              fn.returns || null,
+              fn.docstring || null
+            ]
+          );
+          insertedEntries.push(fnEntry.rows[0]);
+        }
+      }
+
+      await client.query('COMMIT');
+
+      // Update project updated_at timestamp
+      await db.query(
+        'UPDATE projects SET updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+        [projectId]
+      );
+
+      res.status(201).json({
+        review: newReview,
+        entries: insertedEntries
+      });
+
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
+    }
+
+  } catch (err) {
+    console.error('AI Documentation endpoint error:', err.message);
+    res.status(500).json({ message: 'Server error during documentation generation' });
   }
 });
 

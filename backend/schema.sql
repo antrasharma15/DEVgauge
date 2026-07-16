@@ -112,3 +112,19 @@ CREATE TABLE IF NOT EXISTS complexity_metrics (
 
 -- Index for complexity metrics review lookup
 CREATE INDEX IF NOT EXISTS idx_complexity_metrics_review_id ON complexity_metrics(review_id);
+
+-- DOCUMENTATION ENTRIES TABLE (Day 10)
+CREATE TABLE IF NOT EXISTS documentation_entries (
+    id SERIAL PRIMARY KEY,
+    review_id INT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+    entry_type VARCHAR(20) NOT NULL, -- 'file', 'class', 'function'
+    name VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL,
+    parameters JSONB, -- Array of parameter definitions: [{ name, type, description }]
+    returns TEXT, -- Returns statement/description
+    docstring TEXT, -- Formatted JSDoc / docstring content
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Index for documentation entries review lookup
+CREATE INDEX IF NOT EXISTS idx_documentation_entries_review_id ON documentation_entries(review_id);
