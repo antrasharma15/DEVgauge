@@ -51,11 +51,12 @@ interface Review {
 interface ReviewResultsProps {
   reviewId: number;
   onClose?: () => void;
+  hideHeader?: boolean;
 }
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
 
-export default function ReviewResults({ reviewId, onClose }: ReviewResultsProps) {
+export default function ReviewResults({ reviewId, onClose, hideHeader }: ReviewResultsProps) {
   const [review, setReview] = useState<Review | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -180,29 +181,31 @@ export default function ReviewResults({ reviewId, onClose }: ReviewResultsProps)
     <div className="flex flex-col gap-6 text-zinc-200 animate-in fade-in duration-200">
       
       {/* Header Panel */}
-      <div className="flex items-center justify-between gap-4 pb-2 border-b border-zinc-850/60">
-        <div className="flex items-center gap-3">
-          {onClose && (
-            <button 
-              onClick={onClose}
-              className="w-9 h-9 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 transition-all cursor-pointer shrink-0"
-              title="Close Review"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          )}
-          <div>
-            <h2 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
-              {isComplexity 
-                ? 'Code Complexity Analysis Report' 
-                : isDocs 
-                ? 'Auto-Generated Code Documentation' 
-                : 'Review Audit Findings'}
-            </h2>
-            <p className="text-xs text-zinc-500">Record ID: #{review.id} • Created: {new Date(review.created_at).toLocaleString()}</p>
+      {!hideHeader && (
+        <div className="flex items-center justify-between gap-4 pb-2 border-b border-zinc-850/60">
+          <div className="flex items-center gap-3">
+            {onClose && (
+              <button 
+                onClick={onClose}
+                className="w-9 h-9 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 transition-all cursor-pointer shrink-0"
+                title="Close Review"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+            <div>
+              <h2 className="text-lg font-bold text-zinc-100 flex items-center gap-2">
+                {isComplexity 
+                  ? 'Code Complexity Analysis Report' 
+                  : isDocs 
+                  ? 'Auto-Generated Code Documentation' 
+                  : 'Review Audit Findings'}
+              </h2>
+              <p className="text-xs text-zinc-500">Record ID: #{review.id} • Created: {new Date(review.created_at).toLocaleString()}</p>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {isComplexity ? (
         /* Render complexity metrics dashboard */

@@ -169,4 +169,43 @@ router.get('/:id/documentation', auth, async (req, res) => {
   }
 });
 
+// @route   DELETE api/reviews/:id
+// @desc    Delete a specific review run and its findings/metrics
+// @access  Private (Owner only)
+router.delete('/:id', auth, async (req, res) => {
+  const reviewId = req.params.id;
+  const userId = req.user.id;
+
+  try {
+    // 1. Verify existence
+    const reviewResult = await db.query(
+      `SELECT r.id, p.user_id
+       FROM reviews r
+       JOIN projects p ON r.project_id = p.id
+       WHERE r.id = $1`,
+      [reviewId]
+    );
+
+    if (reviewResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Review not found' });
+    }
+
+    const review = reviewResult.rows[0];
+
+    // Verify ownership (Prompt 3: return 403)
+    if (review.user_id !== userId) {
+      return res.status(403).json({ message: 'Unauthorized to delete this review' });
+    }
+
+    // 2. Delete review from DB (cascades database foreign key rows)
+    await db.query('DELETE FROM reviews WHERE id = $1', [reviewId]);
+
+    res.json({ message: 'Review audit log deleted successfully' });
+
+  } catch (err) {
+    console.error('Delete Review Error:', err.message);
+    res.status(500).json({ message: 'Server error during review deletion' });
+  }
+});
+
 module.exports = router;

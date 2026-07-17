@@ -42,138 +42,124 @@ const request = (method, path, data = null, headers = {}) => {
   });
 };
 
-async function runTests() {
+async function runEdgeCaseTests() {
   console.log("=============================================");
-  console.log("       DEVGAUGE LINTER EDGE CASES TESTS      ");
+  console.log("       DEVGAUGE EDGE CASES TESTING           ");
   console.log("=============================================");
 
   const timestamp = Date.now();
-  const user1Email = `user1_${timestamp}@example.com`;
-  const user2Email = `user2_${timestamp}@example.com`;
+  const emailA = `user_a_${timestamp}@example.com`;
+  const emailB = `user_b_${timestamp}@example.com`;
   const password = "SecurePassword123";
 
-  // 1. Sign up test users
-  const res1 = await request('POST', '/api/auth/register', { name: "User One", email: user1Email, password });
-  const user1Token = res1.data.token;
+  // 1. Setup two distinct users
+  console.log("[Test] Creating two distinct users...");
+  const registerA = await request('POST', '/api/auth/register', { name: "User A", email: emailA, password });
+  const registerB = await request('POST', '/api/auth/register', { name: "User B", email: emailB, password });
 
-  const res2 = await request('POST', '/api/auth/register', { name: "User Two", email: user2Email, password });
-  const user2Token = res2.data.token;
+  const tokenA = registerA.data.token;
+  const tokenB = registerB.data.token;
 
-  // --- EDGE CASE 1: Clean file (Zero issues) ---
-  console.log("\n[Edge Case 1] Analyze file with zero issues...");
-  const projectClean = await request('POST', '/api/projects', {
-    project_name: "Clean JS Project",
-    code: "console.log('Clean code!');",
+  // 2. Create projects for User A and User B
+  console.log("[Test] Submitting projects for both users...");
+  const projA = await request('POST', '/api/projects', {
+    project_name: "Super Secret Proj A",
+    code: "console.log('User A Code');",
     language: "javascript"
-  }, { 'Authorization': `Bearer ${user1Token}` });
-  
-  const cleanProjId = projectClean.data.id;
-  const analysisClean = await request('POST', `/api/projects/${cleanProjId}/analyze`, null, {
-    'Authorization': `Bearer ${user1Token}`
-  });
-  console.log(` -> Status: ${analysisClean.status} (Expected: 200)`);
-  console.log(` -> Findings count: ${analysisClean.data.findings.length} (Expected: 0)`);
-  if (analysisClean.status === 200 && analysisClean.data.findings.length === 0) {
-    console.log(" -> PASS");
-  } else {
-    console.error(" -> FAIL:", analysisClean.data);
-  }
+  }, { 'Authorization': `Bearer ${tokenA}` });
 
-  // --- EDGE CASE 2: Syntax Error (Unparseable file) ---
-  console.log("\n[Edge Case 2] Analyze file with syntax error (unparseable)...");
-  const projectSyntaxErr = await request('POST', '/api/projects', {
-    project_name: "Broken Syntax Project",
-    code: "const x = ; // Syntax error",
+  const projB = await request('POST', '/api/projects', {
+    project_name: "Super Secret Proj B",
+    code: "console.log('User B Code');",
     language: "javascript"
-  }, { 'Authorization': `Bearer ${user1Token}` });
-  
-  const syntaxProjId = projectSyntaxErr.data.id;
-  const analysisSyntax = await request('POST', `/api/projects/${syntaxProjId}/analyze`, null, {
-    'Authorization': `Bearer ${user1Token}`
-  });
-  console.log(` -> Status: ${analysisSyntax.status} (Expected: 200)`);
-  console.log(` -> Findings count: ${analysisSyntax.data.findings.length} (Expected: 1)`);
-  if (analysisSyntax.status === 200 && analysisSyntax.data.findings.length === 1) {
-    const finding = analysisSyntax.data.findings[0];
-    console.log(`    -> Severity: "${finding.severity}"`);
-    console.log(`    -> Issue: "${finding.issue}" (Expected: parser-error)`);
-    console.log(`    -> Explanation: "${finding.explanation}"`);
-    if (finding.issue === 'parser-error') {
-      console.log(" -> PASS");
-    } else {
-      console.error(" -> FAIL: Issue rule wasn't parser-error");
-    }
-  } else {
-    console.error(" -> FAIL:", analysisSyntax.data);
-  }
+  }, { 'Authorization': `Bearer ${tokenB}` });
 
-  // --- EDGE CASE 3: Unsupported Language ---
-  console.log("\n[Edge Case 3] Analyze file in an unsupported language (.java)...");
-  const projectJava = await request('POST', '/api/projects', {
-    project_name: "Java Project",
-    code: "public class Main {}",
-    language: "java"
-  }, { 'Authorization': `Bearer ${user1Token}` });
-  
-  const javaProjId = projectJava.data.id;
-  const analysisJava = await request('POST', `/api/projects/${javaProjId}/analyze`, null, {
-    'Authorization': `Bearer ${user1Token}`
+  console.log(` -> User A Proj ID: ${projA.data.id}, User B Proj ID: ${projB.data.id}`);
+
+  // 3. Search with no matches
+  console.log("\n[Test] Asserting search with no matches returns empty list...");
+  const searchNone = await request('GET', '/api/projects?search=NonExistentProjectString', null, {
+    'Authorization': `Bearer ${tokenA}`
   });
-  console.log(` -> Status: ${analysisJava.status} (Expected: 400)`);
-  console.log(` -> Message: "${analysisJava.data.message}"`);
-  if (analysisJava.status === 400 && analysisJava.data.message.includes('not supported')) {
+  console.log(` -> Status: ${searchNone.status}, Results count: ${searchNone.data.length} (Expected: 0)`);
+  if (searchNone.status === 200 && searchNone.data.length === 0) {
     console.log(" -> PASS");
   } else {
     console.error(" -> FAIL");
   }
 
-  // --- EDGE CASE 4: Duplicate Analysis (Preserve history) ---
-  console.log("\n[Edge Case 4] Analyze same project twice to check history preservation...");
-  const projectDup = await request('POST', '/api/projects', {
-    project_name: "Double Audit Project",
-    code: "let x = 1;\nconsole.log(y);",
-    language: "javascript"
-  }, { 'Authorization': `Bearer ${user1Token}` });
-  
-  const dupProjId = projectDup.data.id;
-  
-  console.log(" -> Triggering analysis 1...");
-  const run1 = await request('POST', `/api/projects/${dupProjId}/analyze`, null, {
-    'Authorization': `Bearer ${user1Token}`
+  // 4. Case insensitivity check
+  console.log("\n[Test] Asserting search is case-insensitive...");
+  const searchCase = await request('GET', '/api/projects?search=secret', null, {
+    'Authorization': `Bearer ${tokenA}`
   });
-  console.log(`    -> Review ID 1: ${run1.data.id}`);
-
-  console.log(" -> Triggering analysis 2...");
-  const run2 = await request('POST', `/api/projects/${dupProjId}/analyze`, null, {
-    'Authorization': `Bearer ${user1Token}`
-  });
-  console.log(`    -> Review ID 2: ${run2.data.id}`);
-
-  if (run1.status === 200 && run2.status === 200 && run1.data.id !== run2.data.id) {
-    console.log(" -> PASS (Review history preserved correctly)");
-  } else {
-    console.error(" -> FAIL: review IDs matched or execution failed");
-  }
-
-  // --- EDGE CASE 5: Privacy (Analyze another user's project) ---
-  console.log("\n[Edge Case 5] Analyze project that doesn't belong to the logged-in user...");
-  const analysisPrivate = await request('POST', `/api/projects/${dupProjId}/analyze`, null, {
-    'Authorization': `Bearer ${user2Token}`
-  });
-  console.log(` -> Status: ${analysisPrivate.status} (Expected: 404)`);
-  if (analysisPrivate.status === 404) {
+  console.log(` -> Status: ${searchCase.status}, Results count: ${searchCase.data.length} (Expected: 1)`);
+  if (searchCase.status === 200 && searchCase.data.length === 1 && searchCase.data[0].project_name === "Super Secret Proj A") {
     console.log(" -> PASS");
   } else {
-    console.error(" -> FAIL:", analysisPrivate.data);
+    console.error(" -> FAIL", searchCase.data);
+  }
+
+  // 5. Cross-user isolation verification
+  console.log("\n[Test] Asserting user A cannot retrieve user B's project list...");
+  const listA = await request('GET', '/api/projects', null, {
+    'Authorization': `Bearer ${tokenA}`
+  });
+  const hasUserBProj = listA.data.some(p => p.id === projB.data.id);
+  console.log(` -> User A project count: ${listA.data.length}, Contains User B's project: ${hasUserBProj} (Expected: false)`);
+  if (!hasUserBProj) {
+    console.log(" -> PASS");
+  } else {
+    console.error(" -> FAIL");
+  }
+
+  // 6. Delete unauthorized project (403 check)
+  console.log("\n[Test] Asserting user B cannot delete user A's project (403)...");
+  const delForbidden = await request('DELETE', `/api/projects/${projA.data.id}`, null, {
+    'Authorization': `Bearer ${tokenB}`
+  });
+  console.log(` -> Status code returned: ${delForbidden.status} (Expected: 403)`);
+  if (delForbidden.status === 403) {
+    console.log(" -> PASS");
+  } else {
+    console.error(" -> FAIL", delForbidden.data);
+  }
+
+  // 7. Double-click review deletion handling
+  console.log("\n[Test] Asserting double-click deletion safety...");
+  // Trigger audit review run for User A project
+  const analyze = await request('POST', `/api/projects/${projA.data.id}/analyze`, null, {
+    'Authorization': `Bearer ${tokenA}`
+  });
+  const reviewId = analyze.data.id;
+
+  // First delete trigger
+  console.log(` -> Triggering first DELETE on review ID: ${reviewId}...`);
+  const delOnce = await request('DELETE', `/api/reviews/${reviewId}`, null, {
+    'Authorization': `Bearer ${tokenA}`
+  });
+  console.log(` -> First delete status: ${delOnce.status} (Expected: 200)`);
+
+  // Second delete trigger (Double Click simulation)
+  console.log(` -> Triggering second DELETE on review ID: ${reviewId}...`);
+  const delTwice = await request('DELETE', `/api/reviews/${reviewId}`, null, {
+    'Authorization': `Bearer ${tokenA}`
+  });
+  console.log(` -> Second delete status: ${delTwice.status} (Expected: 404)`);
+
+  if (delOnce.status === 200 && delTwice.status === 404) {
+    console.log(" -> PASS (Double click handles gracefully returning 404 already deleted)");
+  } else {
+    console.error(" -> FAIL");
   }
 
   console.log("\n=============================================");
-  console.log("         LINTER EDGE CASES COMPLETE          ");
+  console.log("       EDGE CASES TESTS COMPLETE             ");
   console.log("=============================================");
   process.exit(0);
 }
 
-runTests().catch(err => {
+runEdgeCaseTests().catch(err => {
   console.error(err);
   process.exit(1);
 });

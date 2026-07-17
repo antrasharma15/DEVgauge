@@ -219,18 +219,36 @@ router.post('/upload', auth, (req, res, next) => {
 // @desc    List all projects for the logged-in user
 // @access  Private
 router.get('/', auth, async (req, res) => {
+  const { search, sort } = req.query;
+  const userId = req.user.id;
+
   try {
-    const userId = req.user.id;
-    const result = await db.query(
-      `SELECT p.id, p.project_name, p.language, p.file_path, p.created_at,
-         (SELECT overall_score FROM reviews r WHERE r.project_id = p.id ORDER BY r.created_at DESC LIMIT 1) as quality_score,
-         (SELECT id FROM reviews r WHERE r.project_id = p.id ORDER BY r.created_at DESC LIMIT 1) as latest_review_id,
-         (SELECT summary FROM reviews r WHERE r.project_id = p.id ORDER BY r.created_at DESC LIMIT 1) as latest_review_summary
-       FROM projects p
-       WHERE p.user_id = $1
-       ORDER BY p.created_at DESC`,
-      [userId]
-    );
+    let sql = `
+      SELECT p.id, p.project_name, p.language, p.file_path, p.created_at,
+        (SELECT overall_score FROM reviews r WHERE r.project_id = p.id ORDER BY r.created_at DESC LIMIT 1) as quality_score,
+        (SELECT id FROM reviews r WHERE r.project_id = p.id ORDER BY r.created_at DESC LIMIT 1) as latest_review_id,
+        (SELECT summary FROM reviews r WHERE r.project_id = p.id ORDER BY r.created_at DESC LIMIT 1) as latest_review_summary,
+        (SELECT review_type FROM reviews r WHERE r.project_id = p.id ORDER BY r.created_at DESC LIMIT 1) as latest_review_type
+      FROM projects p
+      WHERE p.user_id = $1
+    `;
+    const params = [userId];
+
+    if (search) {
+      params.push(`%${search}%`);
+      sql += ` AND p.project_name ILIKE $${params.length}`;
+    }
+
+    if (sort === 'oldest') {
+      sql += ' ORDER BY p.created_at ASC';
+    } else if (sort === 'name' || sort === 'alphabetical') {
+      sql += ' ORDER BY p.project_name ASC';
+    } else {
+      // default: newest
+      sql += ' ORDER BY p.created_at DESC';
+    }
+
+    const result = await db.query(sql, params);
     res.json(result.rows);
   } catch (err) {
     console.error('List Projects Error:', err.message);
@@ -696,6 +714,7 @@ router.post('/:id/complexity', auth, async (req, res) => {
 router.get('/:id/reviews', auth, async (req, res) => {
   const projectId = req.params.id;
   const userId = req.user.id;
+  const { type, from, to } = req.query;
 
   try {
     // 1. Fetch the project and verify ownership
@@ -708,12 +727,26 @@ router.get('/:id/reviews', auth, async (req, res) => {
       return res.status(404).json({ message: 'Project not found or authorization denied' });
     }
 
-    // 2. Fetch all reviews associated with this project
-    const reviewsResult = await db.query(
-      'SELECT id, review_type, overall_score, summary, created_at FROM reviews WHERE project_id = $1 ORDER BY created_at DESC',
-      [projectId]
-    );
+    // 2. Build dynamic filters
+    let sql = 'SELECT id, review_type, overall_score, summary, created_at FROM reviews WHERE project_id = $1';
+    const params = [projectId];
 
+    if (type) {
+      params.push(type);
+      sql += ` AND review_type = $${params.length}`;
+    }
+    if (from) {
+      params.push(from);
+      sql += ` AND created_at >= $${params.length}`;
+    }
+    if (to) {
+      params.push(to);
+      sql += ` AND created_at <= $${params.length}`;
+    }
+
+    sql += ' ORDER BY created_at DESC';
+
+    const reviewsResult = await db.query(sql, params);
     res.json(reviewsResult.rows);
 
   } catch (err) {
@@ -915,6 +948,65 @@ router.post('/:id/documentation', auth, async (req, res) => {
   } catch (err) {
     console.error('AI Documentation endpoint error:', err.message);
     res.status(500).json({ message: 'Server error during documentation generation' });
+  }
+});
+
+// @route   DELETE api/projects/:id
+// @desc    Delete a project and all associated reviews and files
+// @access  Private (Owner only)
+router.delete('/:id', auth, async (req, res) => {
+  const projectId = req.params.id;
+  const userId = req.user.id;
+
+  try {
+    // 1. Fetch the project and verify existence
+    const projectResult = await db.query(
+      'SELECT id, user_id, file_path FROM projects WHERE id = $1',
+      [projectId]
+    );
+
+    if (projectResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    const project = projectResult.rows[0];
+
+    // Verify ownership (Prompt 3: return 403)
+    if (project.user_id !== userId) {
+      return res.status(403).json({ message: 'Unauthorized to delete this project' });
+    }
+
+    // 2. Perform DB deletion in a transaction (Prompt 3)
+    const client = await db.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Delete project row (this cascades to reviews, findings, metrics, entries in DB due to ON DELETE CASCADE)
+      await client.query('DELETE FROM projects WHERE id = $1', [projectId]);
+
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
+    }
+
+    // 3. Delete source code file from disk
+    const absoluteFilePath = path.join(__dirname, '..', project.file_path);
+    try {
+      if (fs.existsSync(absoluteFilePath)) {
+        fs.unlinkSync(absoluteFilePath);
+      }
+    } catch (fsErr) {
+      console.warn(`Warning: failed to delete file on disk at ${absoluteFilePath}:`, fsErr.message);
+    }
+
+    res.json({ message: 'Project and all associated audits deleted successfully' });
+
+  } catch (err) {
+    console.error('Delete Project Error:', err.message);
+    res.status(500).json({ message: 'Server error during project deletion' });
   }
 });
 

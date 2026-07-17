@@ -24,7 +24,9 @@ import {
   FolderOpen,
   TrendingUp,
   Hash,
-  BookOpen
+  BookOpen,
+  Trash2,
+  FileText
 } from "lucide-react";
 import PasteCode from "../components/PasteCode";
 import UploadCode from "../components/UploadCode";
@@ -64,9 +66,22 @@ export default function Dashboard() {
   const [fetchingProjects, setFetchingProjects] = useState<boolean>(true);
   const [dashboardTab, setDashboardTab] = useState<'dashboard' | 'history'>('dashboard');
   
+  // Search & Sort filters (Day 11)
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [sortBy, setSortBy] = useState<string>("newest");
+  
   // Reviews history list for the selected project
   const [projectReviews, setProjectReviews] = useState<any[]>([]);
   const [fetchingReviews, setFetchingReviews] = useState<boolean>(false);
+
+  // Unified Tabs details states (Day 11)
+  const [activeDetailTab, setActiveDetailTab] = useState<'static' | 'ai' | 'complexity' | 'documentation' | 'code'>('static');
+  const [selectedReviewIds, setSelectedReviewIds] = useState<{
+    static: number | null;
+    ai: number | null;
+    complexity: number | null;
+    documentation: number | null;
+  }>({ static: null, ai: null, complexity: null, documentation: null });
 
   // Protect Route
   useEffect(() => {
@@ -75,13 +90,14 @@ export default function Dashboard() {
     }
   }, [user, loading, router]);
 
-  // Fetch projects list
-  const fetchProjects = async () => {
+  // Fetch projects list (Day 11: search & sort)
+  const fetchProjects = async (search = "", sort = "latest") => {
     setFetchingProjects(true);
     try {
       const token = localStorage.getItem('devgauge_token');
       const response = await axios.get(`${API_URL}/api/projects`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': `Bearer ${token}` },
+        params: { search, sort }
       });
       setProjects(response.data);
     } catch (err) {
@@ -93,9 +109,13 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (user) {
-      fetchProjects();
+      const delayDebounce = setTimeout(() => {
+        fetchProjects(searchQuery, sortBy);
+      }, 300); // 300ms debounce
+
+      return () => clearTimeout(delayDebounce);
     }
-  }, [user]);
+  }, [user, searchQuery, sortBy]);
 
   // Fetch project code content and reviews list
   const handleSelectProject = async (project: Project) => {
@@ -120,7 +140,22 @@ export default function Dashboard() {
       const [codeRes, reviewsRes] = await Promise.all([codePromise, reviewsPromise]);
       
       setProjectCode(codeRes.data.code);
-      setProjectReviews(reviewsRes.data);
+      const reviews = reviewsRes.data;
+      setProjectReviews(reviews);
+
+      // Find latest reviews for each category
+      const staticId = reviews.find((r: any) => r.review_type === 'static' || r.review_type === 'linter')?.id || null;
+      const aiId = reviews.find((r: any) => r.review_type === 'ai')?.id || null;
+      const complexityId = reviews.find((r: any) => r.review_type === 'complexity')?.id || null;
+      const docId = reviews.find((r: any) => r.review_type === 'documentation')?.id || null;
+
+      setSelectedReviewIds({
+        static: staticId,
+        ai: aiId,
+        complexity: complexityId,
+        documentation: docId
+      });
+      setActiveDetailTab('static'); // default to static linter analysis tab
     } catch (err) {
       console.error("Error fetching project details:", err);
     } finally {
@@ -138,7 +173,9 @@ export default function Dashboard() {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
-      setActiveReviewId(response.data.id);
+      const newReviewId = response.data.id;
+      setSelectedReviewIds(prev => ({ ...prev, static: newReviewId }));
+      setActiveDetailTab('static');
       fetchProjects(); // Refresh sidebar scores
       
       const reviewsRes = await axios.get(`${API_URL}/api/projects/${projectId}/reviews`, {
@@ -162,7 +199,9 @@ export default function Dashboard() {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
-      setActiveReviewId(response.data.id);
+      const newReviewId = response.data.id;
+      setSelectedReviewIds(prev => ({ ...prev, ai: newReviewId }));
+      setActiveDetailTab('ai');
       fetchProjects();
       
       const reviewsRes = await axios.get(`${API_URL}/api/projects/${projectId}/reviews`, {
@@ -186,7 +225,9 @@ export default function Dashboard() {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
-      setActiveReviewId(response.data.review.id);
+      const newReviewId = response.data.review.id;
+      setSelectedReviewIds(prev => ({ ...prev, complexity: newReviewId }));
+      setActiveDetailTab('complexity');
       fetchProjects();
       
       const reviewsRes = await axios.get(`${API_URL}/api/projects/${projectId}/reviews`, {
@@ -210,7 +251,9 @@ export default function Dashboard() {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
-      setActiveReviewId(response.data.review.id);
+      const newReviewId = response.data.review.id;
+      setSelectedReviewIds(prev => ({ ...prev, documentation: newReviewId }));
+      setActiveDetailTab('documentation');
       fetchProjects();
       
       const reviewsRes = await axios.get(`${API_URL}/api/projects/${projectId}/reviews`, {
@@ -222,6 +265,86 @@ export default function Dashboard() {
       alert(err.response?.data?.message || "Documentation generation execution failed.");
     } finally {
       setRunningDocs(false);
+    }
+  };
+
+  // Delete a specific review run (Day 11)
+  const deleteReview = async (reviewId: number) => {
+    if (!confirm("Are you sure you want to permanently delete this audit record from your history?")) {
+      return;
+    }
+    
+    try {
+      const token = localStorage.getItem('devgauge_token');
+      await axios.delete(`${API_URL}/api/reviews/${reviewId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      // Refresh review history log lists
+      if (selectedProject) {
+        const reviewsRes = await axios.get(`${API_URL}/api/projects/${selectedProject.id}/reviews`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const reviews = reviewsRes.data;
+        setProjectReviews(reviews);
+        
+        // Update selection states
+        setSelectedReviewIds(prev => {
+          const updated = { ...prev };
+          if (updated.static === reviewId) {
+            updated.static = reviews.find((r: any) => r.review_type === 'static' || r.review_type === 'linter')?.id || null;
+          }
+          if (updated.ai === reviewId) {
+            updated.ai = reviews.find((r: any) => r.review_type === 'ai')?.id || null;
+          }
+          if (updated.complexity === reviewId) {
+            updated.complexity = reviews.find((r: any) => r.review_type === 'complexity')?.id || null;
+          }
+          if (updated.documentation === reviewId) {
+            updated.documentation = reviews.find((r: any) => r.review_type === 'documentation')?.id || null;
+          }
+          return updated;
+        });
+      }
+      fetchProjects(searchQuery, sortBy); // Update sidebar overview scores
+    } catch (err: any) {
+      console.error("Delete review error:", err);
+      // Swallow 404 Not Found if it was already deleted by a double click
+      if (err.response?.status !== 404) {
+        alert(err.response?.data?.message || "Failed to delete review record.");
+      }
+    }
+  };
+
+  // Delete an entire project (Day 11)
+  const deleteProject = async (projectId: number) => {
+    if (!selectedProject) return;
+
+    const typedName = prompt(
+      `WARNING: You are about to permanently delete this project, including its source code file and all associated static/AI/complexity/documentation audits. This action CANNOT be undone.\n\nTo confirm, please type the project name "${selectedProject.project_name}" below:`
+    );
+
+    if (typedName !== selectedProject.project_name) {
+      alert("Project name confirmation mismatch. Deletion cancelled.");
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('devgauge_token');
+      await axios.delete(`${API_URL}/api/projects/${projectId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      setSelectedProject(null);
+      setProjectCode("");
+      setSelectedReviewIds({ static: null, ai: null, complexity: null, documentation: null });
+      fetchProjects(searchQuery, sortBy);
+    } catch (err: any) {
+      console.error("Delete project error:", err);
+      // Swallow 404 Not Found if it was already deleted by a double click
+      if (err.response?.status !== 404) {
+        alert(err.response?.data?.message || "Failed to delete project.");
+      }
     }
   };
 
@@ -441,11 +564,13 @@ export default function Dashboard() {
               />
             </div>
           ) : selectedProject ? (
-            /* SELECTED PROJECT VIEW PANEL */
+            /* UNIFIED PROJECT DETAIL VIEW PANEL (Day 11) */
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               
-              {/* Left Panel: Project details and code preview (takes 2 cols) */}
-              <div className="lg:col-span-2 p-6 rounded-2xl border border-zinc-900 bg-zinc-900/10 backdrop-blur-md flex flex-col gap-5">
+              {/* Left Panel: Project details, Tabs Switcher, and Tab Content (takes 2 cols) */}
+              <div className="lg:col-span-2 p-6 rounded-2xl border border-zinc-900 bg-zinc-900/10 backdrop-blur-md flex flex-col gap-6">
+                
+                {/* Project Header */}
                 <div className="flex items-center justify-between border-b border-zinc-900 pb-4">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-400">
@@ -453,181 +578,345 @@ export default function Dashboard() {
                     </div>
                     <div>
                       <h3 className="font-bold text-white text-sm">{selectedProject.project_name}</h3>
-                      <p className="text-zinc-500 text-[10px] flex items-center gap-1.5">
+                      <p className="text-zinc-500 text-[10px] flex items-center gap-1.5 mt-0.5">
                         <Code className="w-3.5 h-3.5" /> Language: <span className="uppercase text-zinc-300 font-bold">{selectedProject.language}</span>
+                        <span>•</span>
+                        <Calendar className="w-3.5 h-3.5" /> Created: <span className="text-zinc-300">{new Date(selectedProject.created_at).toLocaleDateString()}</span>
                       </p>
                     </div>
                   </div>
                   <button 
                     onClick={() => { setSelectedProject(null); setProjectCode(""); }}
-                    className="px-3 h-8.5 rounded-xl border border-zinc-900 text-zinc-400 hover:text-zinc-200 text-xs font-semibold cursor-pointer"
+                    className="px-3 h-8.5 rounded-xl border border-zinc-900 text-zinc-400 hover:text-zinc-200 text-xs font-semibold cursor-pointer transition-all duration-200"
                   >
                     Close Project
                   </button>
                 </div>
 
-                {/* Code Preview Section */}
-                <div className="flex flex-col gap-2">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 flex items-center gap-1">
-                    <Code className="w-3.5 h-3.5" /> File Code Preview
-                  </span>
-                  {loadingCode ? (
-                    <div className="h-64 rounded-xl bg-zinc-950/60 border border-zinc-900 flex items-center justify-center text-xs text-zinc-500 gap-2">
-                      <Loader2 className="w-4.5 h-4.5 animate-spin" /> Loading source file...
+                {/* Tabs Switcher */}
+                <div className="flex border-b border-zinc-900 p-0.5 bg-zinc-950/40 rounded-xl">
+                  {(['static', 'ai', 'complexity', 'documentation', 'code'] as const).map((tab) => {
+                    const isActive = activeDetailTab === tab;
+                    const label = tab === 'static' ? 'Static Analysis'
+                                : tab === 'ai' ? 'AI Review'
+                                : tab === 'complexity' ? 'Complexity'
+                                : tab === 'documentation' ? 'Documentation'
+                                : 'Source Code';
+                    return (
+                      <button
+                        key={tab}
+                        onClick={() => setActiveDetailTab(tab)}
+                        className={`flex-1 py-2 text-center text-xs font-bold rounded-lg cursor-pointer transition-all duration-200 ${
+                          isActive 
+                            ? 'bg-zinc-900 text-white shadow-sm border border-zinc-800' 
+                            : 'text-zinc-400 hover:text-zinc-200'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Tab content panel */}
+                <div className="flex-1">
+                  {activeDetailTab === 'code' ? (
+                    /* Code Preview Tab */
+                    <div className="flex flex-col gap-3">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 flex items-center gap-1">
+                        <Code className="w-3.5 h-3.5" /> File Code Preview
+                      </span>
+                      {loadingCode ? (
+                        <div className="h-64 rounded-xl bg-zinc-950/60 border border-zinc-900 flex items-center justify-center text-xs text-zinc-500 gap-2">
+                          <Loader2 className="w-4.5 h-4.5 animate-spin" /> Loading source file...
+                        </div>
+                      ) : (
+                        <div className="max-h-[500px] overflow-y-auto rounded-xl bg-zinc-950 border border-zinc-900/80 p-4 font-mono text-[11px] text-zinc-300 leading-relaxed scrollbar-thin">
+                          <pre className="whitespace-pre">{projectCode}</pre>
+                        </div>
+                      )}
                     </div>
                   ) : (
-                    <div className="max-h-[360px] overflow-y-auto rounded-xl bg-zinc-950 border border-zinc-900/80 p-4 font-mono text-[11px] text-zinc-300 leading-relaxed scrollbar-thin">
-                      <pre className="whitespace-pre">{projectCode}</pre>
-                    </div>
+                    /* Review Tab Content */
+                    (() => {
+                      const activeReviewId = selectedReviewIds[activeDetailTab];
+                      if (activeReviewId) {
+                        return (
+                          <div className="max-h-[550px] overflow-y-auto pr-1 scrollbar-thin">
+                            <ReviewResults reviewId={activeReviewId} hideHeader={true} />
+                          </div>
+                        );
+                      }
+                      
+                      // Empty state with Action call to run the review
+                      const typeLabel = activeDetailTab === 'static' ? 'Static Linter Scan'
+                                      : activeDetailTab === 'ai' ? 'AI Review Audit'
+                                      : activeDetailTab === 'complexity' ? 'Complexity Metrics Scan'
+                                      : 'Auto-Documentation wiki';
+                      const triggerFn = activeDetailTab === 'static' ? () => runStaticAnalysis(selectedProject.id)
+                                      : activeDetailTab === 'ai' ? () => runAIReview(selectedProject.id)
+                                      : activeDetailTab === 'complexity' ? () => runComplexityAnalysis(selectedProject.id)
+                                      : () => runDocsGeneration(selectedProject.id);
+                      const isRunning = activeDetailTab === 'static' ? analyzing
+                                      : activeDetailTab === 'ai' ? runningAI
+                                      : activeDetailTab === 'complexity' ? runningComplexity
+                                      : runningDocs;
+                      const runLabel = 'Run this analysis';
+
+                      return (
+                        <div className="py-16 px-4 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/20 text-center flex flex-col items-center justify-center gap-4">
+                          <AlertTriangle className="w-8 h-8 text-zinc-650" />
+                          <div className="flex flex-col gap-1">
+                            <h4 className="text-zinc-300 font-bold text-xs">No analysis data found</h4>
+                            <p className="text-[10px] text-zinc-500 max-w-xs leading-relaxed">
+                              You haven't generated a {typeLabel} for this version of the project yet. Click the trigger button below to launch the engine.
+                            </p>
+                          </div>
+                          <button
+                            onClick={triggerFn}
+                            disabled={analyzing || runningAI || runningComplexity || runningDocs || loadingCode}
+                            className="mt-2 px-6 h-9.5 rounded-xl bg-violet-600 hover:bg-violet-750 text-white text-xs font-bold shadow-md shadow-violet-600/15 disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
+                          >
+                            {isRunning ? (
+                              <span className="flex items-center gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                Processing Run...
+                              </span>
+                            ) : (
+                              runLabel
+                            )}
+                          </button>
+                        </div>
+                      );
+                    })()
                   )}
                 </div>
               </div>
 
-              {/* Right Panel: Analysis Actions & History (takes 1 col) */}
-              <div className="p-6 rounded-2xl border border-zinc-900 bg-zinc-900/10 backdrop-blur-md flex flex-col justify-between gap-6 min-h-[460px]">
-                <div className="flex flex-col gap-5.5">
-                  <h3 className="font-bold text-white text-sm border-b border-zinc-900 pb-3.5 flex items-center gap-2">
-                    <Cpu className="w-4 h-4 text-violet-500" />
-                    Audit Controls
+              {/* Right Panel: Actions, Chronological Timeline & Deletes (takes 1 col) */}
+              <div className="p-6 rounded-2xl border border-zinc-900 bg-zinc-900/10 backdrop-blur-md flex flex-col justify-between gap-6 min-h-[550px]">
+                
+                {/* Timeline section */}
+                <div className="flex flex-col gap-4">
+                  <h3 className="font-bold text-white text-sm border-b border-zinc-900 pb-3 flex items-center gap-2">
+                    <History className="w-4 h-4 text-violet-500" />
+                    Audit Logs Timeline
                   </h3>
 
-                  {/* Dynamic Audit Runs History List */}
+                  {/* Filter timeline reviews list */}
                   <div className="flex flex-col gap-2">
-                    <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Audit History Log</span>
+                    <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Runs History Log</span>
+                    
                     {fetchingReviews ? (
-                      <div className="py-8 text-center text-xs text-zinc-650 flex items-center justify-center gap-1.5">
-                        <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-500" /> Loading runs...
+                      <div className="py-12 text-center text-xs text-zinc-500 flex items-center justify-center gap-1.5">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-500" /> Loading timeline...
                       </div>
                     ) : projectReviews.length === 0 ? (
                       <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-950/40 text-[10px] text-zinc-500 leading-relaxed">
-                        This project has no past review runs. Trigger the linter or AI review engines below.
+                        This project has no past review runs. Use the quick controls below to audit code.
                       </div>
                     ) : (
-                      <div className="flex flex-col gap-2 max-h-[190px] overflow-y-auto scrollbar-thin">
-                        {projectReviews.map((rev) => (
-                          <div 
-                            key={rev.id}
-                            onClick={() => setActiveReviewId(rev.id)}
-                            className="p-3 rounded-xl border border-zinc-900 bg-zinc-950/20 hover:border-zinc-850 hover:bg-zinc-950/40 flex justify-between items-center transition-all duration-150 cursor-pointer group"
-                          >
-                            <div className="flex flex-col text-left min-w-0 pr-2">
-                              <span className="text-[10px] font-semibold text-zinc-350 group-hover:text-white transition-colors truncate">
-                                {new Date(rev.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
-                              </span>
-                              <span className="text-[9px] text-zinc-550 group-hover:text-zinc-400 transition-colors truncate mt-0.5">
-                                <span className={`font-bold mr-1 ${rev.review_type === 'ai' ? 'text-pink-400/90' : 'text-cyan-400/90'}`}>
-                                  [{rev.review_type === 'ai' ? 'AI' : 'Linter'}]
+                      <div className="flex flex-col gap-2 max-h-[260px] overflow-y-auto scrollbar-thin pr-1">
+                        {projectReviews.map((rev) => {
+                          const isStatic = rev.review_type === 'static' || rev.review_type === 'linter';
+                          const isAI = rev.review_type === 'ai';
+                          const isComplexity = rev.review_type === 'complexity';
+                          const isDocs = rev.review_type === 'documentation';
+
+                          const reviewTypeKey = isStatic ? 'static' : isAI ? 'ai' : isComplexity ? 'complexity' : 'documentation';
+                          const isCurrentActive = selectedReviewIds[reviewTypeKey] === rev.id && activeDetailTab === reviewTypeKey;
+
+                          const labelText = isStatic ? 'LINTER'
+                                          : isAI ? 'AI AUDIT'
+                                          : isComplexity ? 'COMPLEXITY'
+                                          : 'API DOCS';
+
+                          const labelColor = isStatic ? 'bg-cyan-950/30 text-cyan-400 border-cyan-900/30'
+                                           : isAI ? 'bg-pink-950/30 text-pink-400 border-pink-900/30'
+                                           : isComplexity ? 'bg-emerald-950/30 text-emerald-400 border-emerald-900/30'
+                                           : 'bg-fuchsia-950/30 text-fuchsia-400 border-fuchsia-900/30';
+
+                          return (
+                            <div 
+                              key={rev.id}
+                              className={`p-3 rounded-xl border flex justify-between items-center transition-all duration-150 relative ${
+                                isCurrentActive 
+                                  ? 'border-violet-500/30 bg-violet-950/5' 
+                                  : 'border-zinc-900 bg-zinc-950/20'
+                              }`}
+                            >
+                              <div className="flex flex-col text-left min-w-0 pr-6">
+                                <span className="text-[10px] font-semibold text-zinc-350 truncate">
+                                  {new Date(rev.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
                                 </span>
-                                {rev.summary}
-                              </span>
+                                <span className="text-[9px] text-zinc-550 truncate mt-1 flex items-center gap-1.5">
+                                  <span className={`px-1 rounded-[4px] border text-[8px] font-extrabold tracking-wider ${labelColor}`}>
+                                    {labelText}
+                                  </span>
+                                  <span className="truncate">{rev.summary}</span>
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2 shrink-0">
+                                <button
+                                  onClick={() => {
+                                    // Switch tab and select review run
+                                    setActiveDetailTab(reviewTypeKey);
+                                    setSelectedReviewIds(prev => ({ ...prev, [reviewTypeKey]: rev.id }));
+                                  }}
+                                  className="text-[9px] text-violet-400 hover:text-violet-300 hover:underline font-bold cursor-pointer mr-1"
+                                >
+                                  View
+                                </button>
+
+                                {rev.overall_score !== null && rev.overall_score !== undefined && (
+                                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${
+                                    rev.overall_score >= 90 
+                                      ? 'bg-emerald-950/20 text-emerald-400 border-emerald-900/20' 
+                                      : rev.overall_score >= 70 
+                                      ? 'bg-violet-950/20 text-violet-400 border-violet-900/20'
+                                      : 'bg-amber-950/20 text-amber-400 border-amber-900/20'
+                                  }`}>
+                                    {rev.overall_score}
+                                  </span>
+                                )}
+                                
+                                <button
+                                  onClick={() => deleteReview(rev.id)}
+                                  className="w-7 h-7 rounded-lg border border-zinc-900 hover:border-red-950 bg-zinc-950/40 text-zinc-500 hover:text-red-400 hover:bg-red-950/10 flex items-center justify-center transition-all cursor-pointer"
+                                  title="Delete Review Run"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
                             </div>
-                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border shrink-0 ${
-                              rev.overall_score >= 90 
-                                ? 'bg-emerald-950/20 text-emerald-400 border-emerald-900/20' 
-                                : rev.overall_score >= 70 
-                                ? 'bg-violet-950/20 text-violet-400 border-violet-900/20'
-                                : 'bg-amber-950/20 text-amber-400 border-amber-900/20'
-                            }`}>
-                              {rev.overall_score}
-                            </span>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
                 </div>
 
-                {/* Auditing Triggers */}
-                <div className="flex flex-col gap-2 shrink-0">
-                  {/* Linter Trigger Button */}
-                   <button
-                    onClick={() => runStaticAnalysis(selectedProject.id)}
-                    disabled={analyzing || runningAI || runningComplexity || runningDocs || loadingCode}
-                    className="flex items-center justify-center gap-2 h-10 w-full rounded-xl bg-gradient-to-r from-violet-600 to-cyan-600 text-white text-xs font-bold shadow-lg shadow-violet-600/15 hover:scale-[1.01] hover:shadow-violet-600/25 active:scale-[0.99] disabled:opacity-50 disabled:pointer-events-none transition-all duration-200 cursor-pointer"
-                  >
-                    {analyzing ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Running Linter...
-                      </>
-                    ) : (
-                      <>
-                        <Play className="w-3.5 h-3.5 fill-current text-white" />
-                        Run Linter Audit
-                      </>
-                    )}
-                  </button>
+                {/* Quick Auditing Triggers & Project Deletion Control */}
+                <div className="flex flex-col gap-3 shrink-0">
+                  <div className="grid grid-cols-2 gap-2">
+                    {/* Linter Trigger Button */}
+                     <button
+                      onClick={() => runStaticAnalysis(selectedProject.id)}
+                      disabled={analyzing || runningAI || runningComplexity || runningDocs || loadingCode}
+                      className="flex items-center justify-center gap-1.5 h-9 rounded-xl bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-300 text-[10px] font-bold disabled:opacity-50 disabled:pointer-events-none transition-all cursor-pointer"
+                    >
+                      {analyzing ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <>
+                          <Play className="w-3 h-3 fill-current text-cyan-400" />
+                          Lint Audit
+                        </>
+                      )}
+                    </button>
 
-                  {/* AI Review Trigger Button (Prompt 4) */}
-                  <button
-                    onClick={() => runAIReview(selectedProject.id)}
-                    disabled={analyzing || runningAI || runningComplexity || runningDocs || loadingCode}
-                    className="flex items-center justify-center gap-2 h-10 w-full rounded-xl bg-gradient-to-r from-pink-600 to-violet-600 text-white text-xs font-bold shadow-lg shadow-pink-600/15 hover:scale-[1.01] hover:shadow-pink-600/25 active:scale-[0.99] disabled:opacity-50 disabled:pointer-events-none transition-all duration-200 cursor-pointer"
-                  >
-                    {runningAI ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Generating AI...
-                      </>
-                    ) : (
-                      <>
-                        <Cpu className="w-4 h-4 text-white" />
-                        Run AI Review
-                      </>
-                    )}
-                  </button>
+                    {/* AI Review Trigger Button (Prompt 4) */}
+                    <button
+                      onClick={() => runAIReview(selectedProject.id)}
+                      disabled={analyzing || runningAI || runningComplexity || runningDocs || loadingCode}
+                      className="flex items-center justify-center gap-1.5 h-9 rounded-xl bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-300 text-[10px] font-bold disabled:opacity-50 disabled:pointer-events-none transition-all cursor-pointer"
+                    >
+                      {runningAI ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <>
+                          <Cpu className="w-3.5 h-3.5 text-pink-400" />
+                          AI Review
+                        </>
+                      )}
+                    </button>
 
-                  {/* Complexity Trigger Button (Day 9) */}
-                  <button
-                    onClick={() => runComplexityAnalysis(selectedProject.id)}
-                    disabled={analyzing || runningAI || runningComplexity || runningDocs || loadingCode}
-                    className="flex items-center justify-center gap-2 h-10 w-full rounded-xl bg-gradient-to-r from-cyan-600 to-emerald-600 text-white text-xs font-bold shadow-lg shadow-cyan-600/15 hover:scale-[1.01] hover:shadow-cyan-600/25 active:scale-[0.99] disabled:opacity-50 disabled:pointer-events-none transition-all duration-200 cursor-pointer"
-                  >
-                    {runningComplexity ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Analyzing Complexity...
-                      </>
-                    ) : (
-                      <>
-                        <Hash className="w-4 h-4 text-white" />
-                        Run Complexity Scan
-                      </>
-                    )}
-                  </button>
+                    {/* Complexity Trigger Button (Day 9) */}
+                    <button
+                      onClick={() => runComplexityAnalysis(selectedProject.id)}
+                      disabled={analyzing || runningAI || runningComplexity || runningDocs || loadingCode}
+                      className="flex items-center justify-center gap-1.5 h-9 rounded-xl bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-300 text-[10px] font-bold disabled:opacity-50 disabled:pointer-events-none transition-all cursor-pointer"
+                    >
+                      {runningComplexity ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <>
+                          <Hash className="w-3.5 h-3.5 text-emerald-400" />
+                          Complexity
+                        </>
+                      )}
+                    </button>
 
-                  {/* Documentation Trigger Button (Day 10) */}
-                  <button
-                    onClick={() => runDocsGeneration(selectedProject.id)}
-                    disabled={analyzing || runningAI || runningComplexity || runningDocs || loadingCode}
-                    className="flex items-center justify-center gap-2 h-10 w-full rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white text-xs font-bold shadow-lg shadow-violet-600/15 hover:scale-[1.01] hover:shadow-violet-600/25 active:scale-[0.99] disabled:opacity-50 disabled:pointer-events-none transition-all duration-200 cursor-pointer"
-                  >
-                    {runningDocs ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Generating Docs...
-                      </>
-                    ) : (
-                      <>
-                        <BookOpen className="w-4 h-4 text-white" />
-                        Generate Docs
-                      </>
-                    )}
-                  </button>
+                    {/* Documentation Trigger Button (Day 10) */}
+                    <button
+                      onClick={() => runDocsGeneration(selectedProject.id)}
+                      disabled={analyzing || runningAI || runningComplexity || runningDocs || loadingCode}
+                      className="flex items-center justify-center gap-1.5 h-9 rounded-xl bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-300 text-[10px] font-bold disabled:opacity-50 disabled:pointer-events-none transition-all cursor-pointer"
+                    >
+                      {runningDocs ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <>
+                          <BookOpen className="w-3.5 h-3.5 text-fuchsia-400" />
+                          Wiki Docs
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Danger zone: delete project */}
+                  <div className="border-t border-zinc-900 pt-3">
+                    <button
+                      onClick={() => deleteProject(selectedProject.id)}
+                      disabled={analyzing || runningAI || runningComplexity || runningDocs || loadingCode}
+                      className="flex items-center justify-center gap-2 h-10 w-full rounded-xl border border-red-950/40 text-red-500 hover:bg-red-950/15 hover:border-red-900/40 hover:text-red-400 text-xs font-bold transition-all duration-200 cursor-pointer disabled:opacity-45"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Delete Project File
+                    </button>
+                  </div>
                 </div>
-
               </div>
             </div>
           ) : dashboardTab === 'history' ? (
             /* COMPREHENSIVE HISTORY LISTING VIEW */
             <div className="p-6 rounded-2xl border border-zinc-900 bg-zinc-900/10 backdrop-blur-md flex flex-col gap-4">
               <h3 className="font-bold text-white text-sm border-b border-zinc-900 pb-4">Audited Project Records</h3>
+              
+              {/* Search & Sort Panel */}
+              <div className="flex flex-col sm:flex-row gap-3">
+                <div className="flex-1 relative">
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search projects by name or code content..."
+                    className="w-full h-10 pl-10 pr-4 rounded-xl border border-zinc-800 bg-zinc-900/40 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-violet-500 transition-all duration-200"
+                  />
+                  <svg className="absolute left-3.5 top-3 w-4 h-4 text-zinc-500 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                </div>
+                <div className="w-full sm:w-44">
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value)}
+                    className="w-full h-10 px-3.5 rounded-xl border border-zinc-900/40 bg-zinc-900 text-xs text-zinc-350 focus:outline-none focus:border-violet-500 transition-all duration-200 cursor-pointer"
+                  >
+                    <option value="newest" className="bg-zinc-950">Newest</option>
+                    <option value="oldest" className="bg-zinc-950">Oldest</option>
+                    <option value="name" className="bg-zinc-950">Name A-Z</option>
+                  </select>
+                </div>
+              </div>
+
               {fetchingProjects ? (
                 <div className="py-12 flex justify-center text-xs text-zinc-500 gap-2">
                   <Loader2 className="w-4 h-4 animate-spin text-violet-500" /> Fetching projects...
                 </div>
               ) : projects.length === 0 ? (
-                <p className="py-10 text-center text-xs text-zinc-655">No project audit records found.</p>
+                <p className="py-10 text-center text-xs text-zinc-500">
+                  {searchQuery ? "No projects match your search query." : "No project audit records found."}
+                </p>
               ) : (
                 <div className="flex flex-col gap-3">
                   {projects.map((p) => (
