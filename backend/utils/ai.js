@@ -1,7 +1,7 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 require('dotenv').config();
 
-const apiKey = process.env.GEMINI_API_KEY;
+const apiKey = process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.trim() : undefined;
 
 if (!apiKey) {
   console.warn("WARNING: GEMINI_API_KEY is not defined in environment variables (.env). AI code review will fail.");
@@ -22,7 +22,7 @@ const callAI = async (prompt) => {
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     
     // Create a 60-second timeout promise (60000ms)
     const timeoutPromise = new Promise((_, reject) => {

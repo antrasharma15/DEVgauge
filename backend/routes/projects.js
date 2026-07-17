@@ -3,11 +3,56 @@ const router = express.Router();
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const { body, param, query } = require('express-validator');
 const db = require('../db');
 const auth = require('../middleware/auth');
 const { runESLint, runPylint } = require('../utils/analyzer');
 const { getAIReview, getAIDocumentation } = require('../utils/ai');
 const { getJSComplexity, getPythonComplexity } = require('../utils/complexity');
+const { validateRules } = require('../middleware/validate');
+const { AppError } = require('../middleware/errorHandler');
+const rateLimit = require('express-rate-limit');
+
+const aiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Limit each IP to 10 requests per 15 minutes
+  message: {
+    message: 'AI review rate limit reached. Please try again shortly.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+// Validation rules
+const createProjectValidation = [
+  body('project_name').optional({ checkFalsy: true }).trim().isLength({ max: 100 }).withMessage('Project name must be under 100 characters'),
+  body('code').trim().notEmpty().withMessage('Code snippet cannot be empty'),
+  body('language').trim().notEmpty().withMessage('Language selection is required')
+];
+
+const uploadProjectValidation = [
+  body('project_name').optional({ checkFalsy: true }).trim().isLength({ max: 100 }).withMessage('Project name must be under 100 characters')
+];
+
+const projectIdParamValidation = [
+  param('id').isInt({ min: 1 }).withMessage('Project ID must be a positive integer')
+];
+
+const listProjectsValidation = [
+  query('search').optional().trim(),
+  query('sort').optional().isIn(['newest', 'oldest', 'name', 'alphabetical', 'latest']).withMessage('Invalid sort order'),
+  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer').toInt(),
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be a positive integer between 1 and 100').toInt()
+];
+
+const listReviewsValidation = [
+  param('id').isInt({ min: 1 }).withMessage('Project ID must be a positive integer'),
+  query('type').optional().trim(),
+  query('from').optional().trim(),
+  query('to').optional().trim(),
+  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer').toInt(),
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be a positive integer between 1 and 100').toInt()
+];
 
 // Language-to-file-extension mapping
 const getExtension = (language) => {
@@ -114,18 +159,13 @@ const upload = multer({
 // @route   POST api/projects
 // @desc    Create project and save pasted code snippet
 // @access  Private
-router.post('/', auth, async (req, res) => {
+router.post('/', auth, validateRules(createProjectValidation), async (req, res, next) => {
   const { project_name, code, language } = req.body;
-
-  // Edge Case: Empty code rejected with 400
-  if (!code || !code.trim()) {
-    return res.status(400).json({ message: 'Code snippet cannot be empty' });
-  }
 
   try {
     const userId = req.user.id;
     
-    // Edge Case: Sanitize project_name and auto-generate if empty
+    // Sanitize project_name and auto-generate if empty
     const sanitizedName = sanitizeProjectName(project_name);
     const finalProjectName = sanitizedName || `Untitled-${Date.now()}`;
 
@@ -154,8 +194,7 @@ router.post('/', auth, async (req, res) => {
     res.status(201).json(newProject);
 
   } catch (err) {
-    console.error('Create Project Error:', err.message);
-    res.status(500).json({ message: 'Server error during project creation' });
+    next(err);
   }
 });
 
@@ -166,17 +205,17 @@ router.post('/upload', auth, (req, res, next) => {
   upload.single('file')(req, res, (err) => {
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ message: 'File is too large. Maximum size allowed is 2MB.' });
+        return next(new AppError('File is too large. Maximum size allowed is 2MB.', 400));
       }
-      return res.status(400).json({ message: `Upload error: ${err.message}` });
+      return next(new AppError(`Upload error: ${err.message}`, 400));
     } else if (err) {
-      return res.status(400).json({ message: err.message });
+      return next(new AppError(err.message, 400));
     }
     next();
   });
-}, async (req, res) => {
+}, validateRules(uploadProjectValidation), async (req, res, next) => {
   if (!req.file) {
-    return res.status(400).json({ message: 'Please upload a file' });
+    return next(new AppError('Please upload a file', 400));
   }
 
   // Edge Case: Empty file (0 bytes) rejected with 400
@@ -186,7 +225,7 @@ router.post('/upload', auth, (req, res, next) => {
     } catch (e) {
       console.error('Error unlinking empty file:', e.message);
     }
-    return res.status(400).json({ message: 'Uploaded file cannot be empty' });
+    return next(new AppError('Uploaded file cannot be empty', 400));
   }
 
   try {
@@ -210,26 +249,45 @@ router.post('/upload', auth, (req, res, next) => {
     res.status(201).json(newProject);
 
   } catch (err) {
-    console.error('Upload Project Error:', err.message);
-    res.status(500).json({ message: 'Server error during file upload' });
+    next(err);
   }
 });
 
 // @route   GET api/projects
 // @desc    List all projects for the logged-in user
 // @access  Private
-router.get('/', auth, async (req, res) => {
+router.get('/', auth, validateRules(listProjectsValidation), async (req, res, next) => {
   const { search, sort } = req.query;
   const userId = req.user.id;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 20;
 
   try {
+    // 1. Get total count for pagination
+    let countSql = `SELECT COUNT(*) FROM projects WHERE user_id = $1`;
+    const countParams = [userId];
+    if (search) {
+      countParams.push(`%${search}%`);
+      countSql += ` AND project_name ILIKE $${countParams.length}`;
+    }
+    const countResult = await db.query(countSql, countParams);
+    const total = parseInt(countResult.rows[0].count);
+
+    // 2. Retrieve page data
     let sql = `
       SELECT p.id, p.project_name, p.language, p.file_path, p.created_at,
-        (SELECT overall_score FROM reviews r WHERE r.project_id = p.id ORDER BY r.created_at DESC LIMIT 1) as quality_score,
-        (SELECT id FROM reviews r WHERE r.project_id = p.id ORDER BY r.created_at DESC LIMIT 1) as latest_review_id,
-        (SELECT summary FROM reviews r WHERE r.project_id = p.id ORDER BY r.created_at DESC LIMIT 1) as latest_review_summary,
-        (SELECT review_type FROM reviews r WHERE r.project_id = p.id ORDER BY r.created_at DESC LIMIT 1) as latest_review_type
+             lr.overall_score as quality_score,
+             lr.id as latest_review_id,
+             lr.summary as latest_review_summary,
+             lr.review_type as latest_review_type
       FROM projects p
+      LEFT JOIN LATERAL (
+        SELECT r.id, r.overall_score, r.summary, r.review_type
+        FROM reviews r
+        WHERE r.project_id = p.id
+        ORDER BY r.created_at DESC
+        LIMIT 1
+      ) lr ON TRUE
       WHERE p.user_id = $1
     `;
     const params = [userId];
@@ -248,18 +306,30 @@ router.get('/', auth, async (req, res) => {
       sql += ' ORDER BY p.created_at DESC';
     }
 
+    const offset = (page - 1) * limit;
+    sql += ` LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit, offset);
+
     const result = await db.query(sql, params);
-    res.json(result.rows);
+    
+    res.json({
+      data: result.rows,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    });
   } catch (err) {
-    console.error('List Projects Error:', err.message);
-    res.status(500).json({ message: 'Server error listing projects' });
+    next(err);
   }
 });
 
 // @route   GET api/projects/:id
 // @desc    Fetch project details and code content
 // @access  Private (Owner only)
-router.get('/:id', auth, async (req, res) => {
+router.get('/:id', auth, validateRules(projectIdParamValidation), async (req, res, next) => {
   try {
     const projectId = req.params.id;
     const userId = req.user.id;
@@ -270,14 +340,14 @@ router.get('/:id', auth, async (req, res) => {
     );
 
     if (projectResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Project not found or authorization denied' });
+      throw new AppError('Project not found or authorization denied', 404);
     }
 
     const project = projectResult.rows[0];
     const absoluteFilePath = path.join(__dirname, '..', project.file_path);
     
     if (!fs.existsSync(absoluteFilePath)) {
-      return res.status(404).json({ message: 'Project source code file is missing on disk' });
+      throw new AppError('Project source code file is missing on disk', 404);
     }
 
     const codeContent = fs.readFileSync(absoluteFilePath, 'utf8');
@@ -288,15 +358,14 @@ router.get('/:id', auth, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Get Project Error:', err.message);
-    res.status(500).json({ message: 'Server error retrieving project details' });
+    next(err);
   }
 });
 
 // @route   POST api/projects/:id/analyze
 // @desc    Trigger static code analysis on a project file
 // @access  Private (Owner only)
-router.post('/:id/analyze', auth, async (req, res) => {
+router.post('/:id/analyze', auth, validateRules(projectIdParamValidation), async (req, res, next) => {
   const projectId = req.params.id;
   const userId = req.user.id;
 
@@ -308,7 +377,7 @@ router.post('/:id/analyze', auth, async (req, res) => {
     );
 
     if (projectResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Project not found or authorization denied' });
+      throw new AppError('Project not found or authorization denied', 404);
     }
 
     const project = projectResult.rows[0];
@@ -316,13 +385,13 @@ router.post('/:id/analyze', auth, async (req, res) => {
 
     // 2. Validate file existence on disk
     if (!fs.existsSync(absoluteFilePath)) {
-      return res.status(404).json({ message: 'Project source code file is missing on disk' });
+      throw new AppError('Project source code file is missing on disk', 404);
     }
 
     // Enforce 1MB size limit for static analysis
     const fileSize = fs.statSync(absoluteFilePath).size;
     if (fileSize > 1024 * 1024) {
-      return res.status(400).json({ message: 'File size exceeds static analysis limit of 1MB.' });
+      throw new AppError('File size exceeds static analysis limit of 1MB.', 400);
     }
 
     // 3. Detect language from stored file extension
@@ -335,13 +404,11 @@ router.post('/:id/analyze', auth, async (req, res) => {
       } else if (ext === '.py') {
         findings = await runPylint(absoluteFilePath);
       } else {
-        return res.status(400).json({
-          message: `Static analysis is not supported for file extension ${ext}. Only .js, .ts, and .py files are supported.`
-        });
+        throw new AppError(`Static analysis is not supported for file extension ${ext}. Only .js, .ts, and .py files are supported.`, 400);
       }
     } catch (err) {
       if (err.message === 'TIMEOUT') {
-        return res.status(504).json({ message: 'Static analysis timed out after 10 seconds.' });
+        throw new AppError('Static analysis timed out after 10 seconds.', 504);
       }
       
       // Fallback for execution/parsing failures
@@ -410,15 +477,14 @@ router.post('/:id/analyze', auth, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Project Analysis Error:', err.stack || err.message);
-    res.status(500).json({ message: 'Server error during static code analysis execution' });
+    next(err);
   }
 });
 
 // @route   POST api/projects/:id/ai-review
 // @desc    Trigger AI code review on a project file
 // @access  Private (Owner only)
-router.post('/:id/ai-review', auth, async (req, res) => {
+router.post('/:id/ai-review', auth, validateRules(projectIdParamValidation), aiLimiter, async (req, res, next) => {
   const projectId = req.params.id;
   const userId = req.user.id;
 
@@ -430,7 +496,7 @@ router.post('/:id/ai-review', auth, async (req, res) => {
     );
 
     if (projectResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Project not found or authorization denied' });
+      throw new AppError('Project not found or authorization denied', 404);
     }
 
     const project = projectResult.rows[0];
@@ -438,13 +504,13 @@ router.post('/:id/ai-review', auth, async (req, res) => {
 
     // 2. Validate file existence on disk
     if (!fs.existsSync(absoluteFilePath)) {
-      return res.status(404).json({ message: 'Project source code file is missing on disk' });
+      throw new AppError('Project source code file is missing on disk', 404);
     }
 
     // Enforce 50KB size limit for AI review requests
     const fileSize = fs.statSync(absoluteFilePath).size;
     if (fileSize > 50 * 1024) {
-      return res.status(400).json({ message: 'File size exceeds AI review limit of 50KB.' });
+      throw new AppError('File size exceeds AI review limit of 50KB.', 400);
     }
 
     const codeContent = fs.readFileSync(absoluteFilePath, 'utf8');
@@ -456,10 +522,10 @@ router.post('/:id/ai-review', auth, async (req, res) => {
         `SELECT severity, issue, explanation, line_number 
          FROM review_findings 
          WHERE review_id = (
-           SELECT id FROM reviews 
-           WHERE project_id = $1 AND review_type = 'static' 
-           ORDER BY created_at DESC LIMIT 1
-         )`,
+            SELECT id FROM reviews 
+            WHERE project_id = $1 AND review_type = 'static' 
+            ORDER BY created_at DESC LIMIT 1
+          )`,
         [projectId]
       );
       staticFindings = staticReviewResult.rows;
@@ -476,21 +542,15 @@ router.post('/:id/ai-review', auth, async (req, res) => {
       
       // Handle timeout specifically
       if (aiErr.message === 'TIMEOUT') {
-        return res.status(504).json({
-          message: 'AI review request timed out after 30 seconds.'
-        });
+        throw new AppError('AI review request timed out after 30 seconds.', 504);
       }
 
       // Handle rate limits (429 status code) specifically
       if (aiErr.message.includes('429') || aiErr.status === 429) {
-        return res.status(429).json({
-          message: 'AI review rate limit reached. Please try again shortly.'
-        });
+        throw new AppError('AI review rate limit reached. Please try again shortly.', 429);
       }
 
-      return res.status(502).json({
-        message: `AI review service failed: ${aiErr.message}`
-      });
+      throw new AppError(`AI review service failed: ${aiErr.message}`, 502);
     }
 
     // 4. Compute scoring and counts
@@ -557,15 +617,14 @@ router.post('/:id/ai-review', auth, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('AI Review Route Error:', err.message);
-    res.status(500).json({ message: 'Server error triggering AI code review' });
+    next(err);
   }
 });
 
 // @route   POST api/projects/:id/complexity
 // @desc    Trigger complexity analysis on a project file
 // @access  Private (Owner only)
-router.post('/:id/complexity', auth, async (req, res) => {
+router.post('/:id/complexity', auth, validateRules(projectIdParamValidation), async (req, res, next) => {
   const projectId = req.params.id;
   const userId = req.user.id;
 
@@ -577,7 +636,7 @@ router.post('/:id/complexity', auth, async (req, res) => {
     );
 
     if (projectResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Project not found or authorization denied' });
+      throw new AppError('Project not found or authorization denied', 404);
     }
 
     const project = projectResult.rows[0];
@@ -585,13 +644,13 @@ router.post('/:id/complexity', auth, async (req, res) => {
 
     // 2. Validate file existence on disk
     if (!fs.existsSync(absoluteFilePath)) {
-      return res.status(404).json({ message: 'Project source code file is missing on disk' });
+      throw new AppError('Project source code file is missing on disk', 404);
     }
 
     // Enforce empty file validation
     const fileSize = fs.statSync(absoluteFilePath).size;
     if (fileSize === 0) {
-      return res.status(400).json({ message: 'Source file is empty. Cannot perform complexity analysis.' });
+      throw new AppError('Source file is empty. Cannot perform complexity analysis.', 400);
     }
 
     const language = (project.language || 'javascript').toLowerCase();
@@ -602,25 +661,22 @@ router.post('/:id/complexity', auth, async (req, res) => {
       if (language === 'javascript' || language === 'js') {
         const codeContent = fs.readFileSync(absoluteFilePath, 'utf8');
         if (!codeContent.trim()) {
-          return res.status(400).json({ message: 'Source file is empty. Cannot perform complexity analysis.' });
+          throw new AppError('Source file is empty. Cannot perform complexity analysis.', 400);
         }
         metrics = getJSComplexity(codeContent);
       } else if (language === 'python' || language === 'py') {
         const codeContent = fs.readFileSync(absoluteFilePath, 'utf8');
         if (!codeContent.trim()) {
-          return res.status(400).json({ message: 'Source file is empty. Cannot perform complexity analysis.' });
+          throw new AppError('Source file is empty. Cannot perform complexity analysis.', 400);
         }
         metrics = await getPythonComplexity(absoluteFilePath);
       } else {
-        return res.status(400).json({
-          message: 'Complexity analysis is only supported for JavaScript and Python projects.'
-        });
+        throw new AppError('Complexity analysis is only supported for JavaScript and Python projects.', 400);
       }
     } catch (analysisErr) {
       console.error('Complexity analysis failed:', analysisErr.message);
-      return res.status(502).json({
-        message: `Complexity analysis runner failed: ${analysisErr.message}`
-      });
+      if (analysisErr.statusCode) throw analysisErr;
+      throw new AppError(`Complexity analysis runner failed: ${analysisErr.message}`, 502);
     }
 
     // 4. Save to Database inside a transaction
@@ -703,18 +759,19 @@ router.post('/:id/complexity', auth, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Complexity endpoint error:', err.message);
-    res.status(500).json({ message: 'Server error during complexity analysis execution' });
+    next(err);
   }
 });
 
 // @route   GET api/projects/:id/reviews
 // @desc    List all reviews associated with a specific project
 // @access  Private (Owner only)
-router.get('/:id/reviews', auth, async (req, res) => {
+router.get('/:id/reviews', auth, validateRules(listReviewsValidation), async (req, res, next) => {
   const projectId = req.params.id;
   const userId = req.user.id;
   const { type, from, to } = req.query;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 20;
 
   try {
     // 1. Fetch the project and verify ownership
@@ -724,10 +781,29 @@ router.get('/:id/reviews', auth, async (req, res) => {
     );
 
     if (projectResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Project not found or authorization denied' });
+      throw new AppError('Project not found or authorization denied', 404);
     }
 
-    // 2. Build dynamic filters
+    // 2. Build dynamic count query for pagination
+    let countSql = 'SELECT COUNT(*) FROM reviews WHERE project_id = $1';
+    const countParams = [projectId];
+
+    if (type) {
+      countParams.push(type);
+      countSql += ` AND review_type = $${countParams.length}`;
+    }
+    if (from) {
+      countParams.push(from);
+      countSql += ` AND created_at >= $${countParams.length}`;
+    }
+    if (to) {
+      countParams.push(to);
+      countSql += ` AND created_at <= $${countParams.length}`;
+    }
+    const countResult = await db.query(countSql, countParams);
+    const total = parseInt(countResult.rows[0].count);
+
+    // 3. Build data query
     let sql = 'SELECT id, review_type, overall_score, summary, created_at FROM reviews WHERE project_id = $1';
     const params = [projectId];
 
@@ -746,19 +822,31 @@ router.get('/:id/reviews', auth, async (req, res) => {
 
     sql += ' ORDER BY created_at DESC';
 
+    const offset = (page - 1) * limit;
+    sql += ` LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit, offset);
+
     const reviewsResult = await db.query(sql, params);
-    res.json(reviewsResult.rows);
+    
+    res.json({
+      data: reviewsResult.rows,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    });
 
   } catch (err) {
-    console.error('List Project Reviews Error:', err.message);
-    res.status(500).json({ message: 'Server error retrieving project reviews' });
+    next(err);
   }
 });
 
 // @route   POST api/projects/:id/documentation
 // @desc    Generate documentation for a project via AI and store in documentation_entries table
 // @access  Private
-router.post('/:id/documentation', auth, async (req, res) => {
+router.post('/:id/documentation', auth, validateRules(projectIdParamValidation), aiLimiter, async (req, res, next) => {
   const projectId = req.params.id;
   const userId = req.user.id;
 
@@ -770,7 +858,7 @@ router.post('/:id/documentation', auth, async (req, res) => {
     );
 
     if (projectResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Project not found or authorization denied' });
+      throw new AppError('Project not found or authorization denied', 404);
     }
 
     const project = projectResult.rows[0];
@@ -778,21 +866,21 @@ router.post('/:id/documentation', auth, async (req, res) => {
 
     // 2. Validate file existence on disk
     if (!fs.existsSync(absoluteFilePath)) {
-      return res.status(404).json({ message: 'Project source code file is missing on disk' });
+      throw new AppError('Project source code file is missing on disk', 404);
     }
 
     // 3. Enforce size limit and empty check
     const stats = fs.statSync(absoluteFilePath);
     if (stats.size === 0) {
-      return res.status(400).json({ message: 'Source file is empty. Cannot generate documentation.' });
+      throw new AppError('Source file is empty. Cannot generate documentation.', 400);
     }
     if (stats.size > 50 * 1024) {
-      return res.status(400).json({ message: 'Source code exceeds size limit (50KB) for AI analysis.' });
+      throw new AppError('Source code exceeds size limit (50KB) for AI analysis.', 400);
     }
 
     const codeContent = fs.readFileSync(absoluteFilePath, 'utf8');
     if (!codeContent.trim()) {
-      return res.status(400).json({ message: 'Source file is empty. Cannot generate documentation.' });
+      throw new AppError('Source file is empty. Cannot generate documentation.', 400);
     }
 
     // 4. Generate AI Documentation
@@ -804,21 +892,15 @@ router.post('/:id/documentation', auth, async (req, res) => {
       
       // Handle timeout specifically
       if (aiErr.message === 'TIMEOUT') {
-        return res.status(504).json({
-          message: 'AI documentation request timed out after 60 seconds.'
-        });
+        throw new AppError('AI documentation request timed out after 60 seconds.', 504);
       }
       
       // Handle rate limits (429 status code)
       if (aiErr.message.includes('429') || aiErr.status === 429) {
-        return res.status(429).json({
-          message: 'AI review rate limit reached. Please try again shortly.'
-        });
+        throw new AppError('AI review rate limit reached. Please try again shortly.', 429);
       }
 
-      return res.status(502).json({
-        message: `AI documentation generator failed: ${aiErr.message}`
-      });
+      throw new AppError(`AI documentation generator failed: ${aiErr.message}`, 502);
     }
 
     // 5. Database transaction to save review and documentation entries
@@ -946,15 +1028,14 @@ router.post('/:id/documentation', auth, async (req, res) => {
     }
 
   } catch (err) {
-    console.error('AI Documentation endpoint error:', err.message);
-    res.status(500).json({ message: 'Server error during documentation generation' });
+    next(err);
   }
 });
 
 // @route   DELETE api/projects/:id
 // @desc    Delete a project and all associated reviews and files
 // @access  Private (Owner only)
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', auth, validateRules(projectIdParamValidation), async (req, res, next) => {
   const projectId = req.params.id;
   const userId = req.user.id;
 
@@ -966,14 +1047,14 @@ router.delete('/:id', auth, async (req, res) => {
     );
 
     if (projectResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Project not found' });
+      throw new AppError('Project not found', 404);
     }
 
     const project = projectResult.rows[0];
 
     // Verify ownership (Prompt 3: return 403)
     if (project.user_id !== userId) {
-      return res.status(403).json({ message: 'Unauthorized to delete this project' });
+      throw new AppError('Unauthorized to delete this project', 403);
     }
 
     // 2. Perform DB deletion in a transaction (Prompt 3)
@@ -1005,8 +1086,7 @@ router.delete('/:id', auth, async (req, res) => {
     res.json({ message: 'Project and all associated audits deleted successfully' });
 
   } catch (err) {
-    console.error('Delete Project Error:', err.message);
-    res.status(500).json({ message: 'Server error during project deletion' });
+    next(err);
   }
 });
 

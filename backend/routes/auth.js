@@ -3,9 +3,12 @@ const router = express.Router();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const { body } = require('express-validator');
 const db = require('../db');
 const auth = require('../middleware/auth');
 const rateLimiter = require('../middleware/rateLimiter');
+const { validateRules } = require('../middleware/validate');
+const { AppError } = require('../middleware/errorHandler');
 require('dotenv').config();
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -14,47 +17,44 @@ if (!JWT_SECRET) {
   throw new Error("JWT_SECRET env variable is not set!");
 }
 
-// Validation helpers
-const validateEmail = (email) => {
-  const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return re.test(email);
-};
+// Validation schemas
+const registerValidation = [
+  body('name').trim().notEmpty().withMessage('Name is required').isLength({ max: 50 }).withMessage('Name must be under 50 characters'),
+  body('email').trim().isEmail().withMessage('Please provide a valid email address').normalizeEmail(),
+  body('password')
+    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters long')
+    .matches(/[a-zA-Z]/).withMessage('Password must contain at least one letter')
+    .matches(/[0-9]/).withMessage('Password must contain at least one number')
+];
 
-const validatePassword = (password) => {
-  // Enforce length >= 6, contains at least one letter and one number
-  const hasLetter = /[a-zA-Z]/.test(password);
-  const hasNumber = /[0-9]/.test(password);
-  return password.length >= 6 && hasLetter && hasNumber;
-};
+const loginValidation = [
+  body('email').trim().isEmail().withMessage('Please provide a valid email address').normalizeEmail(),
+  body('password').notEmpty().withMessage('Password is required')
+];
+
+const forgotPasswordValidation = [
+  body('email').trim().isEmail().withMessage('Please provide a valid email address').normalizeEmail()
+];
+
+const resetPasswordValidation = [
+  body('token').trim().notEmpty().withMessage('Password reset token is required'),
+  body('password')
+    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters long')
+    .matches(/[a-zA-Z]/).withMessage('Password must contain at least one letter')
+    .matches(/[0-9]/).withMessage('Password must contain at least one number')
+];
 
 // @route   POST api/auth/register
 // @desc    Register a user
 // @access  Public (Rate Limited)
-router.post('/register', rateLimiter, async (req, res) => {
+router.post('/register', rateLimiter, validateRules(registerValidation), async (req, res, next) => {
   const { name, email, password } = req.body;
-
-  // Basic validation
-  if (!name || !email || !password) {
-    return res.status(400).json({ message: 'Please enter all fields' });
-  }
-
-  // Format validation
-  if (!validateEmail(email)) {
-    return res.status(400).json({ message: 'Please provide a valid email address' });
-  }
-
-  // Strength validation
-  if (!validatePassword(password)) {
-    return res.status(400).json({ 
-      message: 'Password must be at least 6 characters long and contain both letters and numbers' 
-    });
-  }
 
   try {
     // Check for existing user
     const userSelectResult = await db.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase().trim()]);
     if (userSelectResult.rows.length > 0) {
-      return res.status(400).json({ message: 'User already exists' });
+      throw new AppError('User already exists', 400);
     }
 
     // Hash password
@@ -81,7 +81,7 @@ router.post('/register', rateLimiter, async (req, res) => {
       JWT_SECRET,
       { expiresIn: '7d' },
       (err, token) => {
-        if (err) throw err;
+        if (err) return next(err);
         res.status(201).json({
           token,
           user: {
@@ -95,31 +95,21 @@ router.post('/register', rateLimiter, async (req, res) => {
     );
 
   } catch (err) {
-    console.error("Register Error:", err.message);
-    res.status(500).json({ message: 'Server error during registration' });
+    next(err);
   }
 });
 
 // @route   POST api/auth/login
 // @desc    Authenticate user & get token
 // @access  Public (Rate Limited)
-router.post('/login', rateLimiter, async (req, res) => {
+router.post('/login', rateLimiter, validateRules(loginValidation), async (req, res, next) => {
   const { email, password } = req.body;
-
-  // Basic validation
-  if (!email || !password) {
-    return res.status(400).json({ message: 'Please enter all fields' });
-  }
-
-  if (!validateEmail(email)) {
-    return res.status(400).json({ message: 'Invalid credentials' }); // Ambiguous for security
-  }
 
   try {
     // Check for user
     const userSelectResult = await db.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase().trim()]);
     if (userSelectResult.rows.length === 0) {
-      return res.status(400).json({ message: 'Invalid credentials' });
+      throw new AppError('Invalid credentials', 400);
     }
 
     const user = userSelectResult.rows[0];
@@ -127,7 +117,7 @@ router.post('/login', rateLimiter, async (req, res) => {
     // Validate password
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(400).json({ message: 'Invalid credentials' });
+      throw new AppError('Invalid credentials', 400);
     }
 
     // Create JWT
@@ -142,7 +132,7 @@ router.post('/login', rateLimiter, async (req, res) => {
       JWT_SECRET,
       { expiresIn: '7d' },
       (err, token) => {
-        if (err) throw err;
+        if (err) return next(err);
         res.json({
           token,
           user: {
@@ -156,24 +146,15 @@ router.post('/login', rateLimiter, async (req, res) => {
     );
 
   } catch (err) {
-    console.error("Login Error:", err.message);
-    res.status(500).json({ message: 'Server error during login' });
+    next(err);
   }
 });
 
 // @route   POST api/auth/forgot-password
 // @desc    Generate password reset token
 // @access  Public (Rate Limited)
-router.post('/forgot-password', rateLimiter, async (req, res) => {
+router.post('/forgot-password', rateLimiter, validateRules(forgotPasswordValidation), async (req, res, next) => {
   const { email } = req.body;
-
-  if (!email) {
-    return res.status(400).json({ message: 'Please provide an email address' });
-  }
-
-  if (!validateEmail(email)) {
-    return res.status(400).json({ message: 'Please provide a valid email address' });
-  }
 
   try {
     // Check if user exists
@@ -201,26 +182,15 @@ router.post('/forgot-password', rateLimiter, async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Forgot Password Error:", err.message);
-    res.status(500).json({ message: 'Server error during password reset request' });
+    next(err);
   }
 });
 
 // @route   POST api/auth/reset-password
 // @desc    Reset password using token
 // @access  Public (Rate Limited)
-router.post('/reset-password', rateLimiter, async (req, res) => {
+router.post('/reset-password', rateLimiter, validateRules(resetPasswordValidation), async (req, res, next) => {
   const { token, password } = req.body;
-
-  if (!token || !password) {
-    return res.status(400).json({ message: 'Please enter all fields' });
-  }
-
-  if (!validatePassword(password)) {
-    return res.status(400).json({ 
-      message: 'Password must be at least 6 characters long and contain both letters and numbers' 
-    });
-  }
 
   try {
     // Fetch reset token record
@@ -230,7 +200,7 @@ router.post('/reset-password', rateLimiter, async (req, res) => {
     );
 
     if (resetResult.rows.length === 0) {
-      return res.status(400).json({ message: 'Password reset token is invalid or has expired' });
+      throw new AppError('Password reset token is invalid or has expired', 400);
     }
 
     const resetRecord = resetResult.rows[0];
@@ -254,24 +224,22 @@ router.post('/reset-password', rateLimiter, async (req, res) => {
     res.json({ message: 'Password has been successfully updated.' });
 
   } catch (err) {
-    console.error("Reset Password Error:", err.message);
-    res.status(500).json({ message: 'Server error during password reset' });
+    next(err);
   }
 });
 
 // @route   GET api/auth/me
 // @desc    Get current user data
 // @access  Private
-router.get('/me', auth, async (req, res) => {
+router.get('/me', auth, async (req, res, next) => {
   try {
     const userResult = await db.query('SELECT id, name, email, created_at, updated_at FROM users WHERE id = $1', [req.user.id]);
     if (userResult.rows.length === 0) {
-      return res.status(404).json({ message: 'User not found' });
+      throw new AppError('User not found', 404);
     }
     res.json(userResult.rows[0]);
   } catch (err) {
-    console.error("Get Auth User Error:", err.message);
-    res.status(500).json({ message: 'Server error fetching user info' });
+    next(err);
   }
 });
 

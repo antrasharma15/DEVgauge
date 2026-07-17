@@ -26,7 +26,8 @@ import {
   Hash,
   BookOpen,
   Trash2,
-  FileText
+  FileText,
+  RefreshCw
 } from "lucide-react";
 import PasteCode from "../components/PasteCode";
 import UploadCode from "../components/UploadCode";
@@ -69,6 +70,12 @@ export default function Dashboard() {
   // Search & Sort filters (Day 11)
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [sortBy, setSortBy] = useState<string>("newest");
+  const [projectFetchError, setProjectFetchError] = useState<string | null>(null);
+  const [reviewsFetchError, setReviewsFetchError] = useState<string | null>(null);
+  const [projectsPage, setProjectsPage] = useState<number>(1);
+  const [projectsPagination, setProjectsPagination] = useState<{ total: number, pages: number }>({ total: 0, pages: 1 });
+  const [reviewsPage, setReviewsPage] = useState<number>(1);
+  const [reviewsPagination, setReviewsPagination] = useState<{ total: number, pages: number }>({ total: 0, pages: 1 });
   
   // Reviews history list for the selected project
   const [projectReviews, setProjectReviews] = useState<any[]>([]);
@@ -91,31 +98,70 @@ export default function Dashboard() {
   }, [user, loading, router]);
 
   // Fetch projects list (Day 11: search & sort)
-  const fetchProjects = async (search = "", sort = "latest") => {
+  const fetchProjects = async (search = "", sort = "newest", page = 1) => {
     setFetchingProjects(true);
+    setProjectFetchError(null);
     try {
       const token = localStorage.getItem('devgauge_token');
       const response = await axios.get(`${API_URL}/api/projects`, {
         headers: { 'Authorization': `Bearer ${token}` },
-        params: { search, sort }
+        params: { search, sort, page, limit: 20 }
       });
-      setProjects(response.data);
+      setProjects(response.data.data);
+      setProjectsPagination({
+        total: response.data.pagination.total,
+        pages: response.data.pagination.pages
+      });
     } catch (err) {
       console.error("Error fetching projects:", err);
+      setProjectFetchError("Failed to fetch project listings.");
     } finally {
       setFetchingProjects(false);
     }
   };
 
   useEffect(() => {
+    setProjectsPage(1);
+  }, [searchQuery, sortBy]);
+
+  useEffect(() => {
     if (user) {
       const delayDebounce = setTimeout(() => {
-        fetchProjects(searchQuery, sortBy);
+        fetchProjects(searchQuery, sortBy, projectsPage);
       }, 300); // 300ms debounce
 
       return () => clearTimeout(delayDebounce);
     }
-  }, [user, searchQuery, sortBy]);
+  }, [user, searchQuery, sortBy, projectsPage]);
+
+  const fetchReviews = async (projectId: number, page = 1) => {
+    setFetchingReviews(true);
+    setReviewsFetchError(null);
+    try {
+      const token = localStorage.getItem('devgauge_token');
+      const response = await axios.get(`${API_URL}/api/projects/${projectId}/reviews`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+        params: { page, limit: 10 }
+      });
+      setProjectReviews(response.data.data);
+      setReviewsPagination({
+        total: response.data.pagination.total,
+        pages: response.data.pagination.pages
+      });
+      return response.data.data;
+    } catch (err) {
+      console.error("Error fetching reviews:", err);
+      setReviewsFetchError("Failed to fetch project reviews details.");
+    } finally {
+      setFetchingReviews(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedProject) {
+      fetchReviews(selectedProject.id, reviewsPage);
+    }
+  }, [reviewsPage, selectedProject]);
 
   // Fetch project code content and reviews list
   const handleSelectProject = async (project: Project) => {
@@ -124,43 +170,37 @@ export default function Dashboard() {
     setLoadingCode(true);
     setActiveReviewId(null);
     setProjectReviews([]);
-    setFetchingReviews(true);
+    setReviewsPage(1);
 
     try {
       const token = localStorage.getItem('devgauge_token');
       
-      const codePromise = axios.get(`${API_URL}/api/projects/${project.id}`, {
+      const codeRes = await axios.get(`${API_URL}/api/projects/${project.id}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      
-      const reviewsPromise = axios.get(`${API_URL}/api/projects/${project.id}/reviews`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-
-      const [codeRes, reviewsRes] = await Promise.all([codePromise, reviewsPromise]);
       
       setProjectCode(codeRes.data.code);
-      const reviews = reviewsRes.data;
-      setProjectReviews(reviews);
+      const reviews = await fetchReviews(project.id, 1);
 
-      // Find latest reviews for each category
-      const staticId = reviews.find((r: any) => r.review_type === 'static' || r.review_type === 'linter')?.id || null;
-      const aiId = reviews.find((r: any) => r.review_type === 'ai')?.id || null;
-      const complexityId = reviews.find((r: any) => r.review_type === 'complexity')?.id || null;
-      const docId = reviews.find((r: any) => r.review_type === 'documentation')?.id || null;
+      if (reviews && reviews.length > 0) {
+        // Find latest reviews for each category
+        const staticId = reviews.find((r: any) => r.review_type === 'static' || r.review_type === 'linter')?.id || null;
+        const aiId = reviews.find((r: any) => r.review_type === 'ai')?.id || null;
+        const complexityId = reviews.find((r: any) => r.review_type === 'complexity')?.id || null;
+        const docId = reviews.find((r: any) => r.review_type === 'documentation')?.id || null;
 
-      setSelectedReviewIds({
-        static: staticId,
-        ai: aiId,
-        complexity: complexityId,
-        documentation: docId
-      });
+        setSelectedReviewIds({
+          static: staticId,
+          ai: aiId,
+          complexity: complexityId,
+          documentation: docId
+        });
+      }
       setActiveDetailTab('static'); // default to static linter analysis tab
     } catch (err) {
       console.error("Error fetching project details:", err);
     } finally {
       setLoadingCode(false);
-      setFetchingReviews(false);
     }
   };
 
@@ -176,12 +216,8 @@ export default function Dashboard() {
       const newReviewId = response.data.id;
       setSelectedReviewIds(prev => ({ ...prev, static: newReviewId }));
       setActiveDetailTab('static');
-      fetchProjects(); // Refresh sidebar scores
-      
-      const reviewsRes = await axios.get(`${API_URL}/api/projects/${projectId}/reviews`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      setProjectReviews(reviewsRes.data);
+      fetchProjects(searchQuery, sortBy, projectsPage); // Refresh sidebar scores
+      await fetchReviews(projectId, 1);
     } catch (err: any) {
       console.error("Analysis trigger error:", err);
       alert(err.response?.data?.message || "Linter execution failed.");
@@ -202,12 +238,8 @@ export default function Dashboard() {
       const newReviewId = response.data.id;
       setSelectedReviewIds(prev => ({ ...prev, ai: newReviewId }));
       setActiveDetailTab('ai');
-      fetchProjects();
-      
-      const reviewsRes = await axios.get(`${API_URL}/api/projects/${projectId}/reviews`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      setProjectReviews(reviewsRes.data);
+      fetchProjects(searchQuery, sortBy, projectsPage);
+      await fetchReviews(projectId, 1);
     } catch (err: any) {
       console.error("AI Review trigger error:", err);
       alert(err.response?.data?.message || "AI review execution failed.");
@@ -228,12 +260,8 @@ export default function Dashboard() {
       const newReviewId = response.data.review.id;
       setSelectedReviewIds(prev => ({ ...prev, complexity: newReviewId }));
       setActiveDetailTab('complexity');
-      fetchProjects();
-      
-      const reviewsRes = await axios.get(`${API_URL}/api/projects/${projectId}/reviews`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      setProjectReviews(reviewsRes.data);
+      fetchProjects(searchQuery, sortBy, projectsPage);
+      await fetchReviews(projectId, 1);
     } catch (err: any) {
       console.error("Complexity trigger error:", err);
       alert(err.response?.data?.message || "Complexity analysis execution failed.");
@@ -254,12 +282,8 @@ export default function Dashboard() {
       const newReviewId = response.data.review.id;
       setSelectedReviewIds(prev => ({ ...prev, documentation: newReviewId }));
       setActiveDetailTab('documentation');
-      fetchProjects();
-      
-      const reviewsRes = await axios.get(`${API_URL}/api/projects/${projectId}/reviews`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      setProjectReviews(reviewsRes.data);
+      fetchProjects(searchQuery, sortBy, projectsPage);
+      await fetchReviews(projectId, 1);
     } catch (err: any) {
       console.error("Docs generation trigger error:", err);
       alert(err.response?.data?.message || "Documentation generation execution failed.");
@@ -282,31 +306,28 @@ export default function Dashboard() {
       
       // Refresh review history log lists
       if (selectedProject) {
-        const reviewsRes = await axios.get(`${API_URL}/api/projects/${selectedProject.id}/reviews`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const reviews = reviewsRes.data;
-        setProjectReviews(reviews);
-        
-        // Update selection states
-        setSelectedReviewIds(prev => {
-          const updated = { ...prev };
-          if (updated.static === reviewId) {
-            updated.static = reviews.find((r: any) => r.review_type === 'static' || r.review_type === 'linter')?.id || null;
-          }
-          if (updated.ai === reviewId) {
-            updated.ai = reviews.find((r: any) => r.review_type === 'ai')?.id || null;
-          }
-          if (updated.complexity === reviewId) {
-            updated.complexity = reviews.find((r: any) => r.review_type === 'complexity')?.id || null;
-          }
-          if (updated.documentation === reviewId) {
-            updated.documentation = reviews.find((r: any) => r.review_type === 'documentation')?.id || null;
-          }
-          return updated;
-        });
+        const reviews = await fetchReviews(selectedProject.id, reviewsPage);
+        if (reviews) {
+          // Update selection states
+          setSelectedReviewIds(prev => {
+            const updated = { ...prev };
+            if (updated.static === reviewId) {
+              updated.static = reviews.find((r: any) => r.review_type === 'static' || r.review_type === 'linter')?.id || null;
+            }
+            if (updated.ai === reviewId) {
+              updated.ai = reviews.find((r: any) => r.review_type === 'ai')?.id || null;
+            }
+            if (updated.complexity === reviewId) {
+              updated.complexity = reviews.find((r: any) => r.review_type === 'complexity')?.id || null;
+            }
+            if (updated.documentation === reviewId) {
+              updated.documentation = reviews.find((r: any) => r.review_type === 'documentation')?.id || null;
+            }
+            return updated;
+          });
+        }
       }
-      fetchProjects(searchQuery, sortBy); // Update sidebar overview scores
+      fetchProjects(searchQuery, sortBy, projectsPage); // Update sidebar overview scores
     } catch (err: any) {
       console.error("Delete review error:", err);
       // Swallow 404 Not Found if it was already deleted by a double click
@@ -338,7 +359,7 @@ export default function Dashboard() {
       setSelectedProject(null);
       setProjectCode("");
       setSelectedReviewIds({ static: null, ai: null, complexity: null, documentation: null });
-      fetchProjects(searchQuery, sortBy);
+      fetchProjects(searchQuery, sortBy, projectsPage);
     } catch (err: any) {
       console.error("Delete project error:", err);
       // Swallow 404 Not Found if it was already deleted by a double click
@@ -462,11 +483,6 @@ export default function Dashboard() {
             <History className="w-4.5 h-4.5 text-cyan-400" />
             Review History
           </button>
-          
-          <a href="#" className="flex items-center gap-3 px-4 h-11 rounded-xl text-sm font-medium text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900/50 transition-all duration-150">
-            <Settings className="w-4.5 h-4.5" />
-            Settings
-          </a>
         </nav>
 
         {/* User profile section at the bottom */}
@@ -556,7 +572,7 @@ export default function Dashboard() {
                 reviewId={activeReviewId} 
                 onClose={() => { 
                   setActiveReviewId(null); 
-                  fetchProjects(); 
+                  fetchProjects(searchQuery, sortBy, projectsPage); 
                   if (selectedProject) {
                     handleSelectProject(selectedProject);
                   }
@@ -707,7 +723,17 @@ export default function Dashboard() {
                   <div className="flex flex-col gap-2">
                     <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Runs History Log</span>
                     
-                    {fetchingReviews ? (
+                    {reviewsFetchError ? (
+                      <div className="py-8 px-4 rounded-xl border border-red-500/20 bg-red-950/5 text-center flex flex-col items-center justify-center gap-2">
+                        <span className="text-[10px] text-red-400 font-semibold">{reviewsFetchError}</span>
+                        <button 
+                          onClick={() => selectedProject && handleSelectProject(selectedProject)}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-[9px] text-zinc-300 font-bold transition-all cursor-pointer"
+                        >
+                          <RefreshCw className="w-2.5 h-2.5" /> Retry
+                        </button>
+                      </div>
+                    ) : fetchingReviews ? (
                       <div className="py-12 text-center text-xs text-zinc-500 flex items-center justify-center gap-1.5">
                         <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-500" /> Loading timeline...
                       </div>
@@ -792,6 +818,28 @@ export default function Dashboard() {
                             </div>
                           );
                         })}
+                        
+                        {reviewsPagination.pages > 1 && (
+                          <div className="flex items-center justify-between border-t border-zinc-900 pt-3 mt-2">
+                            <button
+                              disabled={reviewsPage === 1}
+                              onClick={() => setReviewsPage(prev => Math.max(1, prev - 1))}
+                              className="px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-zinc-900 text-[9px] text-zinc-355 font-bold transition-all cursor-pointer"
+                            >
+                              Prev
+                            </button>
+                            <span className="text-[9px] text-zinc-500 font-bold">
+                              Page {reviewsPage} of {reviewsPagination.pages}
+                            </span>
+                            <button
+                              disabled={reviewsPage === reviewsPagination.pages}
+                              onClick={() => setReviewsPage(prev => Math.min(reviewsPagination.pages, prev + 1))}
+                              className="px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-zinc-900 text-[9px] text-zinc-355 font-bold transition-all cursor-pointer"
+                            >
+                              Next
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -909,7 +957,17 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {fetchingProjects ? (
+              {projectFetchError ? (
+                <div className="py-8 px-4 rounded-xl border border-red-500/20 bg-red-950/5 text-center flex flex-col items-center justify-center gap-3">
+                  <span className="text-xs text-red-400 font-semibold">{projectFetchError}</span>
+                  <button 
+                    onClick={() => fetchProjects(searchQuery, sortBy)}
+                    className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-[10px] text-zinc-300 font-bold transition-all cursor-pointer"
+                  >
+                    <RefreshCw className="w-3 h-3" /> Retry
+                  </button>
+                </div>
+              ) : fetchingProjects ? (
                 <div className="py-12 flex justify-center text-xs text-zinc-500 gap-2">
                   <Loader2 className="w-4 h-4 animate-spin text-violet-500" /> Fetching projects...
                 </div>
@@ -945,6 +1003,28 @@ export default function Dashboard() {
                       </div>
                     </div>
                   ))}
+                  
+                  {projectsPagination.pages > 1 && (
+                    <div className="flex items-center justify-between border-t border-zinc-900 pt-4 mt-4">
+                      <button
+                        disabled={projectsPage === 1}
+                        onClick={() => setProjectsPage(prev => Math.max(1, prev - 1))}
+                        className="px-3 py-1 rounded bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-zinc-900 text-[10px] text-zinc-355 font-bold transition-all cursor-pointer"
+                      >
+                        Previous
+                      </button>
+                      <span className="text-[10px] text-zinc-500 font-bold">
+                        Page {projectsPage} of {projectsPagination.pages}
+                      </span>
+                      <button
+                        disabled={projectsPage === projectsPagination.pages}
+                        onClick={() => setProjectsPage(prev => Math.min(projectsPagination.pages, prev + 1))}
+                        className="px-3 py-1 rounded bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 disabled:opacity-40 disabled:hover:bg-zinc-900 text-[10px] text-zinc-355 font-bold transition-all cursor-pointer"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1011,7 +1091,17 @@ export default function Dashboard() {
                   )}
                 </h3>
                 
-                {fetchingProjects ? (
+                {projectFetchError ? (
+                  <div className="py-8 px-4 rounded-xl border border-red-500/20 bg-red-950/5 text-center flex flex-col items-center justify-center gap-2">
+                    <span className="text-[10px] text-red-400 font-semibold">{projectFetchError}</span>
+                    <button 
+                      onClick={() => fetchProjects()}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-[9px] text-zinc-300 font-bold transition-all cursor-pointer"
+                    >
+                      <RefreshCw className="w-2.5 h-2.5" /> Retry
+                    </button>
+                  </div>
+                ) : fetchingProjects ? (
                   <div className="py-10 flex justify-center text-xs text-zinc-500 gap-1.5">
                     <Loader2 className="w-4 h-4 animate-spin text-violet-500" /> loading...
                   </div>

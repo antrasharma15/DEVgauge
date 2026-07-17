@@ -1,12 +1,20 @@
 const express = require('express');
 const router = express.Router();
+const { param } = require('express-validator');
 const db = require('../db');
 const auth = require('../middleware/auth');
+const { validateRules } = require('../middleware/validate');
+const { AppError } = require('../middleware/errorHandler');
+
+// Validation rules
+const idParamValidation = [
+  param('id').isInt({ min: 1 }).withMessage('ID must be a positive integer')
+];
 
 // @route   GET api/reviews/:id
 // @desc    Fetch a specific static review with its findings
 // @access  Private (Owner only)
-router.get('/:id', auth, async (req, res) => {
+router.get('/:id', auth, validateRules(idParamValidation), async (req, res, next) => {
   const reviewId = req.params.id;
   const userId = req.user.id;
 
@@ -21,7 +29,7 @@ router.get('/:id', auth, async (req, res) => {
     );
 
     if (reviewResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Review not found or authorization denied' });
+      throw new AppError('Review not found or authorization denied', 404);
     }
 
     const review = reviewResult.rows[0];
@@ -58,15 +66,14 @@ router.get('/:id', auth, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Get Review Error:', err.message);
-    res.status(500).json({ message: 'Server error retrieving review findings' });
+    next(err);
   }
 });
 
 // @route   GET api/reviews/:id/complexity
 // @desc    Fetch complexity metrics specifically for a review ID
 // @access  Private (Owner only)
-router.get('/:id/complexity', auth, async (req, res) => {
+router.get('/:id/complexity', auth, validateRules(idParamValidation), async (req, res, next) => {
   const reviewId = req.params.id;
   const userId = req.user.id;
 
@@ -81,7 +88,7 @@ router.get('/:id/complexity', auth, async (req, res) => {
     );
 
     if (reviewResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Review not found or authorization denied' });
+      throw new AppError('Review not found or authorization denied', 404);
     }
 
     const review = reviewResult.rows[0];
@@ -92,7 +99,7 @@ router.get('/:id/complexity', auth, async (req, res) => {
     );
 
     if (metricsResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Complexity metrics not found for this review' });
+      throw new AppError('Complexity metrics not found for this review', 404);
     }
 
     // Load individual functions list as findings
@@ -106,9 +113,6 @@ router.get('/:id/complexity', auth, async (req, res) => {
       metrics: {
         ...metricsResult.rows[0],
         functions: findingsResult.rows.map(f => {
-          // Parse back function details
-          // Explanation: "Function 'name' has cyclomatic complexity of X."
-          // Suggested_fix: "Line X to Y"
           const nameMatch = f.explanation.match(/Function '([^']+)'/);
           const compMatch = f.explanation.match(/complexity of (\d+)/);
           const rangeMatch = f.suggested_fix ? f.suggested_fix.match(/Line (\d+) to (\d+)/) : null;
@@ -124,15 +128,14 @@ router.get('/:id/complexity', auth, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Get Complexity Metrics Error:', err.message);
-    res.status(500).json({ message: 'Server error retrieving complexity metrics' });
+    next(err);
   }
 });
 
 // @route   GET api/reviews/:id/documentation
 // @desc    Fetch documentation entries specifically for a review ID
 // @access  Private (Owner only)
-router.get('/:id/documentation', auth, async (req, res) => {
+router.get('/:id/documentation', auth, validateRules(idParamValidation), async (req, res, next) => {
   const reviewId = req.params.id;
   const userId = req.user.id;
 
@@ -147,7 +150,7 @@ router.get('/:id/documentation', auth, async (req, res) => {
     );
 
     if (reviewResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Review not found or authorization denied' });
+      throw new AppError('Review not found or authorization denied', 404);
     }
 
     const review = reviewResult.rows[0];
@@ -164,15 +167,14 @@ router.get('/:id/documentation', auth, async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Get Documentation Entries Error:', err.message);
-    res.status(500).json({ message: 'Server error retrieving documentation entries' });
+    next(err);
   }
 });
 
 // @route   DELETE api/reviews/:id
 // @desc    Delete a specific review run and its findings/metrics
 // @access  Private (Owner only)
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', auth, validateRules(idParamValidation), async (req, res, next) => {
   const reviewId = req.params.id;
   const userId = req.user.id;
 
@@ -187,14 +189,14 @@ router.delete('/:id', auth, async (req, res) => {
     );
 
     if (reviewResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Review not found' });
+      throw new AppError('Review not found', 404);
     }
 
     const review = reviewResult.rows[0];
 
     // Verify ownership (Prompt 3: return 403)
     if (review.user_id !== userId) {
-      return res.status(403).json({ message: 'Unauthorized to delete this review' });
+      throw new AppError('Unauthorized to delete this review', 403);
     }
 
     // 2. Delete review from DB (cascades database foreign key rows)
@@ -203,8 +205,7 @@ router.delete('/:id', auth, async (req, res) => {
     res.json({ message: 'Review audit log deleted successfully' });
 
   } catch (err) {
-    console.error('Delete Review Error:', err.message);
-    res.status(500).json({ message: 'Server error during review deletion' });
+    next(err);
   }
 });
 

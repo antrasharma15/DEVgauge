@@ -3,6 +3,7 @@
 
 -- Enable UUID extension if available (optional, but good practice for Supabase)
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- TRIGGER FUNCTION FOR UPDATING TIMESTAMPS
 CREATE OR REPLACE FUNCTION update_modified_column()
@@ -92,7 +93,10 @@ CREATE TABLE IF NOT EXISTS password_resets (
 
 -- INDEXES TO OPTIMIZE JOIN AND LOOKUP QUERIES
 CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_projects_name_trgm ON projects USING gin (project_name gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_reviews_project_id ON reviews(project_id);
+CREATE INDEX IF NOT EXISTS idx_reviews_project_id_created_at_desc ON reviews (project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reviews_project_type_created ON reviews (project_id, review_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_review_findings_review_id ON review_findings(review_id);
 CREATE INDEX IF NOT EXISTS idx_password_resets_token ON password_resets(token);
 CREATE INDEX IF NOT EXISTS idx_password_resets_email ON password_resets(email);

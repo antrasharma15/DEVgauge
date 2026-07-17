@@ -8,8 +8,13 @@ if (!process.env.JWT_SECRET) {
   process.exit(1);
 }
 
+const durationLogger = require('./middleware/durationLogger');
+
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Mount duration logger first to capture full pipeline execution
+app.use(durationLogger);
 
 // Express Middlewares
 const allowedOrigins = [
@@ -48,11 +53,11 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/projects', require('./routes/projects'));
 app.use('/api/reviews', require('./routes/reviews'));
 
-// Global Error Handler
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ message: 'Something went wrong on the server.' });
-});
+const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
+
+// Global 404 and Error Handler
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 // Start Server
 app.listen(PORT, () => {
@@ -79,3 +84,5 @@ app.listen(PORT, () => {
     }
   });
 });
+
+module.exports = app;
