@@ -22,19 +22,19 @@ AI Code Review Assistant (DEVgauge) is a modern full-stack web application desig
 Here are some preview captures of the application in action:
 
 * **Dashboard Overview**
-  ![Dashboard Overview](docs/screenshots/dashboard_overview.png)
+  ![Dashboard Overview](assets/Dashboard.jpeg)
   
 * **Code Submission**
-  ![Code Submission](docs/screenshots/code_submission.png)
+  ![Code Submission](assets/upload%20section.jpeg)
 
-* **Static Analysis Results**
-  ![Static Analysis Results](docs/screenshots/static_analysis.png)
-
-* **AI Review Results**
-  ![AI Review Results](docs/screenshots/ai_review.png)
+* **Static & AI Review Results**
+  ![Static & AI Review Results](assets/review.jpeg)
 
 * **Complexity Metrics**
-  ![Complexity Metrics](docs/screenshots/complexity_metrics.png)
+  ![Complexity Metrics](assets/COMPLEXITY.jpeg)
+
+* **Auto-Generated Documentation**
+  ![Auto-Generated Documentation](assets/DOCUMENTATION.jpeg)
 
 ---
 
