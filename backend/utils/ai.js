@@ -22,7 +22,7 @@ const callAI = async (prompt) => {
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
     
     // Create a 60-second timeout promise (60000ms)
     const timeoutPromise = new Promise((_, reject) => {

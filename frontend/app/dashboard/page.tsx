@@ -679,29 +679,44 @@ export default function Dashboard() {
                                       : runningDocs;
                       const runLabel = 'Run this analysis';
 
+                      const lang = (selectedProject?.language || '').toLowerCase();
+                      const isUnsupportedComplexity = activeDetailTab === 'complexity' && !['javascript', 'js', 'python', 'py'].includes(lang);
+                      const isUnsupportedStatic = activeDetailTab === 'static' && !['javascript', 'js', 'typescript', 'ts', 'python', 'py'].includes(lang);
+                      const isUnsupported = isUnsupportedComplexity || isUnsupportedStatic;
+                      
+                      const errorMsg = isUnsupportedComplexity
+                        ? "Complexity analysis is only supported for JavaScript and Python projects."
+                        : "Static linter scan is only supported for JavaScript, TypeScript, and Python projects.";
+
                       return (
                         <div className="py-16 px-4 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/20 text-center flex flex-col items-center justify-center gap-4">
                           <AlertTriangle className="w-8 h-8 text-zinc-650" />
                           <div className="flex flex-col gap-1">
-                            <h4 className="text-zinc-300 font-bold text-xs">No analysis data found</h4>
+                            <h4 className="text-zinc-300 font-bold text-xs">
+                              {isUnsupported ? "Analysis Not Supported" : "No analysis data found"}
+                            </h4>
                             <p className="text-[10px] text-zinc-500 max-w-xs leading-relaxed">
-                              You haven't generated a {typeLabel} for this version of the project yet. Click the trigger button below to launch the engine.
+                              {isUnsupported 
+                                ? errorMsg 
+                                : `You haven't generated a ${typeLabel} for this version of the project yet. Click the trigger button below to launch the engine.`}
                             </p>
                           </div>
-                          <button
-                            onClick={triggerFn}
-                            disabled={analyzing || runningAI || runningComplexity || runningDocs || loadingCode}
-                            className="mt-2 px-6 h-9.5 rounded-xl bg-violet-600 hover:bg-violet-750 text-white text-xs font-bold shadow-md shadow-violet-600/15 disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
-                          >
-                            {isRunning ? (
-                              <span className="flex items-center gap-2">
-                                <Loader2 className="w-4 h-4 animate-spin" />
-                                Processing Run...
-                              </span>
-                            ) : (
-                              runLabel
-                            )}
-                          </button>
+                          {!isUnsupported && (
+                            <button
+                              onClick={triggerFn}
+                              disabled={analyzing || runningAI || runningComplexity || runningDocs || loadingCode}
+                              className="mt-2 px-6 h-9.5 rounded-xl bg-violet-600 hover:bg-violet-750 text-white text-xs font-bold shadow-md shadow-violet-600/15 disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
+                            >
+                              {isRunning ? (
+                                <span className="flex items-center gap-2">
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                  Processing Run...
+                                </span>
+                              ) : (
+                                runLabel
+                              )}
+                            </button>
+                          )}
                         </div>
                       );
                     })()
@@ -850,9 +865,21 @@ export default function Dashboard() {
                   <div className="grid grid-cols-2 gap-2">
                     {/* Linter Trigger Button */}
                      <button
-                      onClick={() => runStaticAnalysis(selectedProject.id)}
+                      onClick={() => {
+                        const lang = (selectedProject?.language || '').toLowerCase();
+                        if (!['javascript', 'js', 'typescript', 'ts', 'python', 'py'].includes(lang)) {
+                          alert("Static linter scan is only supported for JavaScript, TypeScript, and Python projects.");
+                          return;
+                        }
+                        runStaticAnalysis(selectedProject.id);
+                      }}
                       disabled={analyzing || runningAI || runningComplexity || runningDocs || loadingCode}
-                      className="flex items-center justify-center gap-1.5 h-9 rounded-xl bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-300 text-[10px] font-bold disabled:opacity-50 disabled:pointer-events-none transition-all cursor-pointer"
+                      className={`flex items-center justify-center gap-1.5 h-9 rounded-xl border text-[10px] font-bold transition-all cursor-pointer ${
+                        ['javascript', 'js', 'typescript', 'ts', 'python', 'py'].includes((selectedProject?.language || '').toLowerCase())
+                          ? "bg-zinc-900 hover:bg-zinc-850 border-zinc-800 text-zinc-300"
+                          : "bg-zinc-950 border-zinc-900 text-zinc-650 opacity-40 cursor-not-allowed"
+                      }`}
+                      title={!['javascript', 'js', 'typescript', 'ts', 'python', 'py'].includes((selectedProject?.language || '').toLowerCase()) ? "Static linter only supports JS, TS, and Python" : ""}
                     >
                       {analyzing ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -882,9 +909,21 @@ export default function Dashboard() {
 
                     {/* Complexity Trigger Button (Day 9) */}
                     <button
-                      onClick={() => runComplexityAnalysis(selectedProject.id)}
+                      onClick={() => {
+                        const lang = (selectedProject?.language || '').toLowerCase();
+                        if (!['javascript', 'js', 'python', 'py'].includes(lang)) {
+                          alert("Complexity analysis is only supported for JavaScript and Python projects.");
+                          return;
+                        }
+                        runComplexityAnalysis(selectedProject.id);
+                      }}
                       disabled={analyzing || runningAI || runningComplexity || runningDocs || loadingCode}
-                      className="flex items-center justify-center gap-1.5 h-9 rounded-xl bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-300 text-[10px] font-bold disabled:opacity-50 disabled:pointer-events-none transition-all cursor-pointer"
+                      className={`flex items-center justify-center gap-1.5 h-9 rounded-xl border text-[10px] font-bold transition-all cursor-pointer ${
+                        ['javascript', 'js', 'python', 'py'].includes((selectedProject?.language || '').toLowerCase())
+                          ? "bg-zinc-900 hover:bg-zinc-850 border-zinc-800 text-zinc-300"
+                          : "bg-zinc-950 border-zinc-900 text-zinc-650 opacity-40 cursor-not-allowed"
+                      }`}
+                      title={!['javascript', 'js', 'python', 'py'].includes((selectedProject?.language || '').toLowerCase()) ? "Complexity analysis only supports JS and Python" : ""}
                     >
                       {runningComplexity ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
