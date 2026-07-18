@@ -52,18 +52,18 @@ By combining deterministic compiler-like checks with deep semantic reasoning, de
 
 ##  Features
 
-- **🔐 Secure JWT Authentication**: Full signup, login, password recovery, and secure session management.
-- **📁 Paste/Upload Submission**: Paste snippets directly or upload source files (`.js`, `.py`).
-- **⚙️ Two-Stage Review Pipeline**: ESLint (JavaScript) and Pylint (Python) running in isolated subprocesses.
-- **🤖 AI-Powered Auditing**: Large Language Model reviews assessing security, naming, efficiency, and bugs.
-- **📊 Metric Instrumentation**: Cyclomatic complexity scoring, function complexity distributions, and LOC counts.
-- **📖 Auto-Generated Documentation**: Standard JSDoc or Python docstrings extracted and organized in a wiki layout.
-- **🔍 History & Filters**: Search projects by name with a debounced partial matches query, filter by linter/AI type, and sort chronologically.
-- **🗑️ Complete Teardown Control**: Project deletion (with name confirmation safety) and individual run exclusions.
+- ** Secure JWT Authentication**: Full signup, login, password recovery, and secure session management.
+- ** Paste/Upload Submission**: Paste snippets directly or upload source files (`.js`, `.py`).
+- ** Two-Stage Review Pipeline**: ESLint (JavaScript) and Pylint (Python) running in isolated subprocesses.
+- ** AI-Powered Auditing**: Large Language Model reviews assessing security, naming, efficiency, and bugs.
+- ** Metric Instrumentation**: Cyclomatic complexity scoring, function complexity distributions, and LOC counts.
+- ** Auto-Generated Documentation**: Standard JSDoc or Python docstrings extracted and organized in a wiki layout.
+- ** History & Filters**: Search projects by name with a debounced partial matches query, filter by linter/AI type, and sort chronologically.
+- ** Complete Teardown Control**: Project deletion (with name confirmation safety) and individual run exclusions.
 
 ---
 
-## 🛠️ Tech Stack
+##  Tech Stack
 
 | Component | Technology | Description |
 | :--- | :--- | :--- |
