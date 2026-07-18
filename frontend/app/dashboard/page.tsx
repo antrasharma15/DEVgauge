@@ -801,9 +801,8 @@ export default function Dashboard() {
                               <div className="flex items-center gap-2 shrink-0">
                                 <button
                                   onClick={() => {
-                                    // Switch tab and select review run
-                                    setActiveDetailTab(reviewTypeKey);
-                                    setSelectedReviewIds(prev => ({ ...prev, [reviewTypeKey]: rev.id }));
+                                    // Navigate directly to the standalone report details page
+                                    router.push(`/reviews/${rev.id}`);
                                   }}
                                   className="text-[9px] text-violet-400 hover:text-violet-300 hover:underline font-bold cursor-pointer mr-1"
                                 >

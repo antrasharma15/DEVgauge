@@ -676,6 +676,18 @@ router.post('/:id/complexity', auth, validateRules(projectIdParamValidation), as
     } catch (analysisErr) {
       console.error('Complexity analysis failed:', analysisErr.message);
       if (analysisErr.statusCode) throw analysisErr;
+      
+      const msg = analysisErr.message || '';
+      if (
+        msg.includes('Unexpected token') || 
+        msg.includes('syntax error') || 
+        msg.includes('SyntaxError') || 
+        msg.includes('Syntax error') ||
+        msg.includes('Python syntax error')
+      ) {
+        throw new AppError(`Complexity analysis failed due to code syntax errors: ${analysisErr.message}`, 400);
+      }
+      
       throw new AppError(`Complexity analysis runner failed: ${analysisErr.message}`, 502);
     }
 

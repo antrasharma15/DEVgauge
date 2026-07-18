@@ -92,7 +92,11 @@ const getPythonComplexity = (filePath) => {
           const ccKey = Object.keys(parsedCC)[0];
           const rawKey = Object.keys(parsedRaw)[0];
 
-          const ccList = parsedCC[ccKey] || [];
+          const ccVal = parsedCC[ccKey];
+          if (ccVal && ccVal.error) {
+            return reject(new Error(`Python syntax error: ${ccVal.error}`));
+          }
+          const ccList = Array.isArray(ccVal) ? ccVal : [];
           const rawMetrics = parsedRaw[rawKey] || {};
 
           // Filter out function and class-method elements

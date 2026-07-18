@@ -191,7 +191,7 @@ export default function ComplexityDashboard({ metrics }: ComplexityDashboardProp
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
         {/* Left Side: Recharts Bar Chart (takes 2 cols) */}
-        <div className="lg:col-span-2 p-5 rounded-2xl border border-zinc-900 bg-zinc-950/30 flex flex-col gap-4 min-h-[340px]">
+        <div className="lg:col-span-2 p-5 rounded-2xl border border-zinc-900 bg-zinc-950/30 flex flex-col gap-4 min-h-[340px] min-w-0 overflow-hidden">
           <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
             <Cpu className="w-4 h-4 text-violet-500" /> Function Complexity Metrics Chart
           </h4>
@@ -202,7 +202,7 @@ export default function ComplexityDashboard({ metrics }: ComplexityDashboardProp
               <span className="text-xs font-bold">No functions detected in file</span>
             </div>
           ) : (
-            <div className="flex-1 w-full h-[260px] text-[10px]">
+            <div className="flex-1 w-full h-[260px] text-[10px] min-w-0 overflow-hidden">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData} margin={{ top: 10, right: 10, left: -25, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
