@@ -13,7 +13,7 @@ AI Code Review Assistant (DEVgauge) is a modern full-stack web application desig
 ![JWT](https://img.shields.io/badge/JWT-black?style=for-the-badge&logo=JSON%20web%20tokens&logoColor=F000B8)
 ![xAI Grok](https://img.shields.io/badge/xAI_Grok-FF5A00?style=for-the-badge&logo=xai&logoColor=white)
 ![Vercel](https://img.shields.io/badge/Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white)
-![Render](https://img.shields.io/badge/Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)
+![Railway](https://img.shields.io/badge/Railway-130F24?style=for-the-badge&logo=railway&logoColor=white)
 
 ---
 
@@ -52,14 +52,14 @@ By combining deterministic compiler-like checks with deep semantic reasoning, de
 
 ##  Features
 
-- ** Secure JWT Authentication**: Full signup, login, password recovery, and secure session management.
-- ** Paste/Upload Submission**: Paste snippets directly or upload source files (`.js`, `.py`).
-- ** Two-Stage Review Pipeline**: ESLint (JavaScript) and Pylint (Python) running in isolated subprocesses.
-- ** AI-Powered Auditing**: Large Language Model reviews assessing security, naming, efficiency, and bugs.
-- ** Metric Instrumentation**: Cyclomatic complexity scoring, function complexity distributions, and LOC counts.
-- ** Auto-Generated Documentation**: Standard JSDoc or Python docstrings extracted and organized in a wiki layout.
-- ** History & Filters**: Search projects by name with a debounced partial matches query, filter by linter/AI type, and sort chronologically.
-- ** Complete Teardown Control**: Project deletion (with name confirmation safety) and individual run exclusions.
+-  Secure JWT Authentication**: Full signup, login, password recovery, and secure session management.
+-  Paste/Upload Submission**: Paste snippets directly or upload source files (`.js`, `.py`).
+-  Two-Stage Review Pipeline**: ESLint (JavaScript) and Pylint (Python) running in isolated subprocesses.
+-  AI-Powered Auditing**: Large Language Model reviews assessing security, naming, efficiency, and bugs.
+-  Metric Instrumentation**: Cyclomatic complexity scoring, function complexity distributions, and LOC counts.
+-  Auto-Generated Documentation**: Standard JSDoc or Python docstrings extracted and organized in a wiki layout.
+-  History & Filters**: Search projects by name with a debounced partial matches query, filter by linter/AI type, and sort chronologically.
+-  Complete Teardown Control**: Project deletion (with name confirmation safety) and individual run exclusions.
 
 ---
 
@@ -71,16 +71,16 @@ By combining deterministic compiler-like checks with deep semantic reasoning, de
 | **Backend** | Node.js / Express.js | Core REST API controller with structured error middleware |
 | **Database** | PostgreSQL | Neon.tech Serverless Postgres instance with Pg_trgm indexes |
 | **Auth** | JWT / bcryptjs | Cryptographically signed sessions and password hashing |
-| **AI Integration**| xAI Grok / Gemini SDK | Generative context analysis and wiki doc generator |
+| **AI Integration** / Gemini SDK | Generative context analysis and wiki doc generator |
 | **Static Analysis**| ESLint & Pylint | Child process CLI linters parsing code syntax |
-| **Deployment** | Vercel & Render | Automated static build pipeline and web service hosting |
+| **Deployment** | Vercel & Railway| Automated static build pipeline and web service hosting |
 
 ---
 
 ## Folder Structure
 
 ```text
-ai-code-review-assistant/
+DEVgauge/
 ├── backend/
 │   ├── index.js                  # Main Express server configuration
 │   ├── db.js                     # PostgreSQL connection pooling and init scripts
@@ -188,7 +188,7 @@ The frontend will start on `http://localhost:3000` and proxy requests to the bac
 
 ---
 
-## 📡 API Reference
+##  API Reference
 
 ### User Authentication (`/api/auth`)
 * `POST /api/auth/register` - Create new user account.
@@ -214,18 +214,19 @@ The frontend will start on `http://localhost:3000` and proxy requests to the bac
 
 ##  Deployment
 
-### Backend (Render)
-1. Sign in to [Render](https://render.com) and create a new **Web Service**.
-2. Connect your GitHub repository.
-3. Set the **Build Command** to `npm install`.
-4. Set the **Start Command** to `node index.js` (inside backend directory).
-5. Input all variables in the **Environment** tab matching `backend/.env`.
+### Backend (Railway)
+1. Sign in to [Railway](https://railway.app) and click **New Project**.
+2. Select **Deploy from GitHub repo** and connect your repository.
+3. Under **Settings** -> **General**, configure the root directory to `backend`.
+4. Railway will automatically detect the node version and use the start script configured in `backend/package.json` (`npm run start`).
+5. Navigate to the **Variables** tab and click **Raw Editor** or add variables manually matching `backend/.env`.
+6. Go to the **Settings** tab and click **Generate Domain** under the Public Networking header to expose a public API endpoint.
 
 ### Frontend (Vercel)
 1. Sign in to [Vercel](https://vercel.com) and click **Add New Project**.
 2. Connect your repository and select the `frontend` folder as the root.
 3. Select **Next.js** as the framework preset.
-4. Input `NEXT_PUBLIC_API_URL` pointing to your deployed Render URL under **Environment Variables**.
+4. Input `NEXT_PUBLIC_API_URL` pointing to your deployed Railway backend domain URL under **Environment Variables**.
 5. Click **Deploy**.
 
 ---
@@ -242,8 +243,8 @@ The frontend will start on `http://localhost:3000` and proxy requests to the bac
 
 ---
 
-## 👨‍💻 Author
+##  Author
 
-Built by **[Antra Sharma]**. 
+Built by **Antra Sharma**. 
 
 This application was developed as an internship project demonstrating full-stack engineering, AI API orchestration, static code analysis toolchain configuration, and robust PostgreSQL database design.
