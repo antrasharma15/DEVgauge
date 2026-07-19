@@ -1,0 +1,8 @@
+# Exclude heavy assets and frontend from Railway deployment
+assets/
+frontend/
+docs/
+README.md
+walkthrough.md
+implementation_plan.md
+task.md

@@ -1,16 +1,24 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useAuth } from "../context/AuthContext";
 import { Terminal, Mail, Lock, Loader2, AlertCircle } from "lucide-react";
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, user, loading } = useAuth();
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [formLoading, setFormLoading] = useState(false);
+
+  useEffect(() => {
+    if (!loading && user) {
+      router.push("/dashboard");
+    }
+  }, [user, loading, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,9 +30,9 @@ export default function Login() {
       return;
     }
 
-    setLoading(true);
+    setFormLoading(true);
     const result = await login(email, password);
-    setLoading(false);
+    setFormLoading(false);
 
     if (!result.success) {
       setErr(result.message || "Invalid credentials.");
@@ -100,10 +108,10 @@ export default function Login() {
           {/* Submit Button */}
           <button
             type="submit"
-            disabled={loading}
+            disabled={formLoading}
             className="flex items-center justify-center gap-2 h-11 w-full rounded-xl bg-gradient-to-r from-violet-600 to-cyan-600 text-white text-sm font-semibold shadow-lg shadow-violet-600/10 hover:shadow-violet-600/25 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 disabled:hover:scale-100 disabled:pointer-events-none transition-all duration-200 mt-2"
           >
-            {loading ? (
+            {formLoading ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
                 Signing In...
